@@ -1,0 +1,517 @@
+openapi: 3.0.3
+info:
+  title: ccswap daemon API
+  version: 1.0.0
+  description: |
+    Local API of the ccswap daemon, served over a unix socket. The TCP listener of T3 Code and the web page serves
+    part of it (tcpRoutes in internal/daemon/server.go): reads to the read key or the admin key, changes to the admin
+    key and only on a loopback address, and never a forced switch. The page's texts (/v1/i18n/{lang}) need no key.
+servers:
+  - url: http://ccswap
+paths:
+  /v1/status:
+    get:
+      operationId: getStatus
+      responses:
+        "200": {description: Daemon status, content: {application/json: {schema: {$ref: "#/components/schemas/Status"}}}}
+        "500": {$ref: "#/components/responses/Error"}
+  /v1/accounts:
+    get:
+      operationId: listAccounts
+      responses:
+        "200":
+          description: All accounts
+          content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Account"}}}}
+        "500": {$ref: "#/components/responses/Error"}
+    post:
+      operationId: importAccount
+      description: Store the login made in a temporary Claude Code config dir as an account (or re-login an existing one).
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/ImportRequest"}}}
+      responses:
+        "200": {description: Stored account, content: {application/json: {schema: {$ref: "#/components/schemas/Account"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+  /v1/accounts/adopt:
+    post:
+      operationId: adoptAccount
+      description: Register the login currently in Claude Code as an account.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/AdoptRequest"}}}
+      responses:
+        "200": {description: Adopted account, content: {application/json: {schema: {$ref: "#/components/schemas/Account"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+  /v1/accounts/{name}:
+    parameters:
+      - {name: name, in: path, required: true, schema: {type: string}}
+    patch:
+      operationId: patchAccount
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/AccountPatch"}}}
+      responses:
+        "200": {description: Updated account, content: {application/json: {schema: {$ref: "#/components/schemas/Account"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+    delete:
+      operationId: removeAccount
+      responses:
+        "204": {description: Removed}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+  /v1/accounts/{name}/activate:
+    parameters:
+      - {name: name, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: activateAccount
+      parameters:
+        - {name: force, in: query, required: false, schema: {type: boolean, default: false}}
+      responses:
+        "200": {description: Status after the switch, content: {application/json: {schema: {$ref: "#/components/schemas/Status"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+  /v1/auto:
+    put:
+      operationId: setAuto
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/AutoRequest"}}}
+      responses:
+        "204": {description: Done}
+        "400": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+  /v1/remote:
+    put:
+      operationId: setRemote
+      description: Take usage from another ccswap (url and its key) instead of asking Anthropic; an empty url turns it off. Unix socket only.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/RemoteRequest"}}}
+      responses:
+        "204": {description: Done}
+        "400": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+  /v1/strategy:
+    put:
+      operationId: setStrategy
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/StrategyRequest"}}}
+      responses:
+        "204": {description: Done}
+        "400": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+  /v1/lang:
+    put:
+      operationId: setLang
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/LangRequest"}}}
+      responses:
+        "204": {description: Done}
+        "400": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+  /v1/thresholds:
+    put:
+      operationId: setThresholds
+      description: Replace the switching thresholds; the daemon writes them to config.toml and applies them at once.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/Thresholds"}}}
+      responses:
+        "200": {description: Thresholds in effect, content: {application/json: {schema: {$ref: "#/components/schemas/Thresholds"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+  /v1/web/code:
+    post:
+      operationId: createWebCode
+      description: A one-time code (single use, valid a minute) that the web page trades for the admin key at /v1/web/session. Unix socket only.
+      responses:
+        "200": {description: The code, content: {application/json: {schema: {$ref: "#/components/schemas/WebCode"}}}}
+        "500": {$ref: "#/components/responses/Error"}
+  /v1/web/session:
+    post:
+      operationId: openWebSession
+      description: >-
+        Trade a code from /v1/web/code for the admin key the TCP listener holds. TCP listener only: it takes the code
+        without a key, on a loopback address only; the unix socket answers 404.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/WebSessionRequest"}}}
+      responses:
+        "200": {description: The admin key, content: {application/json: {schema: {$ref: "#/components/schemas/WebSession"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+  /v1/migrate/export:
+    post:
+      operationId: migrateExport
+      description: >-
+        Pack accounts into an encrypted bundle to move them to another machine, and freeze them (no refresh, no switch to
+        them) until /v1/migrate/commit removes them here or /v1/migrate/cancel, a daemon restart or 5 minutes lift the
+        freeze. The code that opens the bundle is in this answer only. Unix socket only.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/MigrateExportRequest"}}}
+      responses:
+        "200": {description: The bundle and its code, content: {application/json: {schema: {$ref: "#/components/schemas/MigrateExport"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+  /v1/migrate/commit:
+    post:
+      operationId: migrateCommit
+      description: >-
+        Remove the accounts of an export here, once their logins are checked unchanged since packing; a second commit of
+        the same export answers 204 again. A daemon restart forgets every export, possibly after its commit landed: on
+        export_gone check whether the accounts are still here. Unix socket only.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/MigrateTokenRequest"}}}
+      responses:
+        "204": {description: The accounts are removed here}
+        "400": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+  /v1/migrate/cancel:
+    post:
+      operationId: migrateCancel
+      description: >-
+        Drop an export that is not committed; its accounts stay here and thaw. A daemon restart forgets every export,
+        possibly after its commit landed: on export_gone check whether the accounts are still here. Unix socket only.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/MigrateTokenRequest"}}}
+      responses:
+        "204": {description: The accounts stay here}
+        "400": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+  /v1/migrate/import:
+    post:
+      operationId: migrateImport
+      description: >-
+        Add the accounts of a bundle from /v1/migrate/export, all or none, and refresh each login at once, which spends
+        the bundle's refresh token: the answer waits on Anthropic and shows the refresh in each account's needs_login and
+        error. With replace, the bundle's login of an account that replaces one here is refreshed first, before anything
+        is written, and only a refreshed login replaces one: bundle_spent and bundle_unchecked refuse the import. A
+        refresh that would keep the answer past about 30 seconds is left to the daemon's next tick. Unix socket only.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/MigrateImportRequest"}}}
+      responses:
+        "200": {description: The added accounts, content: {application/json: {schema: {$ref: "#/components/schemas/MigrateImport"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/events:
+    get:
+      operationId: getEvents
+      description: |
+        Server-sent events: a "state" event whose data is a Snapshot at once and on every change, and a ": ping"
+        comment every 15 s in between.
+      responses:
+        "200": {description: Event stream, content: {text/event-stream: {schema: {type: string}}}}
+        "500": {$ref: "#/components/responses/Error"}
+  /v1/i18n/{lang}:
+    parameters:
+      - {name: lang, in: path, required: true, schema: {type: string}, description: 'A BCP 47 language tag, such as "pt-BR"'}
+    get:
+      operationId: getI18n
+      description: >-
+        The web page's texts in the language of the tag, else of the tag without its last subtags (pt-BR, then pt);
+        English where that language has none. No key on the TCP listener either: the login screen needs them first, and
+        they hold no secret.
+      parameters:
+        - {name: If-None-Match, in: header, schema: {type: string}}
+      responses:
+        "200":
+          description: The texts
+          headers:
+            Cache-Control: {required: true, schema: {type: string}, description: no-cache}
+            ETag: {required: true, schema: {type: string}, description: Changes with the build and the texts}
+          content: {application/json: {schema: {$ref: "#/components/schemas/Catalog"}}}
+        "304":
+          description: If-None-Match names the current texts
+          headers:
+            Cache-Control: {required: true, schema: {type: string}, description: no-cache}
+            ETag: {required: true, schema: {type: string}}
+        "404": {$ref: "#/components/responses/Error"}
+  /v1/refresh:
+    post:
+      operationId: refresh
+      responses:
+        "204": {description: Done}
+        "500": {$ref: "#/components/responses/Error"}
+  /v1/signal:
+    post:
+      operationId: signal
+      description: Raw Claude Code hook input.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/SignalRequest"}}}
+      responses:
+        "204": {description: Accepted}
+        "400": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+components:
+  responses:
+    Error:
+      description: Error
+      content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: |
+            Every code, by status; notes in parentheses (the page's test reads the codes from this list).
+            400 bad_request (malformed request), invalid_name, invalid_thresholds, invalid_strategy, invalid_lang, invalid_remote, invalid_config_dir (import: not a login dir in the ccswap home), login_incomplete,
+            not_bundle (migrate import: not a ccswap bundle), bundle_version (migrate import: made by a newer ccswap),
+            invalid_code (migrate import: the code is malformed), bad_bundle (migrate import: a wrong code or a damaged bundle);
+            401 unauthorized (TCP listener only: no key or a wrong one);
+            403 bad_code (web session: the code is wrong, used or expired), read_only (TCP listener only: the read key on a change),
+            local_only (TCP listener only: a change or a web session on a listener that is not on a loopback address, or under a Host
+            that names no loopback address or localhost);
+            404 not_found (also an unknown language of /v1/i18n), no_entry (adopt: Claude Code has no login);
+            409 duplicate (also migrate import: an email here already without replace, or a name here with another email),
+            remove_active, active_account (import: re-login the active account in claude),
+            near_refresh, entry_changed (Claude Code kept rewriting its login during the switch), entry_expired (Claude Code's access token expired: it has not run for a while),
+            target_refreshing (the target login has no access token yet: the daemon is refreshing it),
+            unknown_active, cannot_identify, needs_login,
+            migrating (the account is being moved to another machine: an export holds it),
+            migrate_active (migrate: the account, or its login, is the one Claude Code uses), export_gone (migrate: no such
+            export: cancelled, expired, or forgotten by a daemon restart, possibly after its commit landed, so check
+            whether the accounts are still here), export_done (migrate cancel: the export is committed already),
+            tokens_changed (migrate commit: a login changed since packing; the export is cancelled),
+            bundle_spent (migrate import with replace: the bundle's login was used already; nothing is imported);
+            500 internal;
+            502 bundle_unchecked (migrate import with replace: the bundle's login was not refreshed, as Anthropic failed or
+            no time was left; nothing is imported, try again).
+        message: {type: string, description: A detail; clients show their own text per code}
+    Thresholds:
+      type: object
+      required: [five_hour, seven_day, hysteresis, min_dwell_seconds, check_active_seconds, check_others_seconds]
+      properties:
+        five_hour: {type: number, format: double}
+        seven_day: {type: number, format: double}
+        hysteresis: {type: number, format: double}
+        min_dwell_seconds: {type: integer}
+        check_active_seconds: {type: integer, description: How often Anthropic is asked for the usage of the account in use}
+        check_others_seconds: {type: integer, description: How often it is asked for every other account's}
+    Status:
+      type: object
+      required: [version, host, active, auto, strategy, unknown_active, target_service, thresholds, shifts]
+      properties:
+        version: {type: string}
+        host: {type: string, description: Computer this ccswap runs on; its settings and switches apply to Claude Code there only}
+        active: {type: string, description: Active account name, empty when none}
+        auto: {type: boolean}
+        strategy: {$ref: "#/components/schemas/Strategy"}
+        last_activity_at: {type: string, format: date-time, description: Newest Claude Code transcript write; absent when unknown}
+        next: {type: string, description: Account auto-switch moves to once the active one runs out; absent when auto is off or none is usable}
+        remote: {$ref: "#/components/schemas/Remote"}
+        unknown_active: {type: boolean}
+        target_service: {type: string}
+        last_poll_at: {type: string, format: date-time}
+        last_switch_at: {type: string, format: date-time, description: Last switch ccswap made; absent before the first}
+        shifts:
+          type: array
+          description: Who held Claude Code over the last 24 hours, oldest first; the current holder's shift has no end, and time it held no known account has no shift
+          items: {$ref: "#/components/schemas/Shift"}
+        listen: {type: string, description: "The address the TCP listener (T3 Code, the web page) is bound to, such as 127.0.0.1:8318; absent while it is off"}
+        thresholds: {$ref: "#/components/schemas/Thresholds"}
+        warning: {type: string, description: Non-fatal warning of the last operation}
+    Shift:
+      type: object
+      required: [account, from]
+      properties:
+        account: {type: string}
+        from: {type: string, format: date-time, description: May be more than 24 hours ago}
+        to: {type: string, format: date-time, description: Absent for the current holder}
+    Snapshot:
+      type: object
+      description: The data of a "state" event of /v1/events.
+      required: [status, accounts]
+      properties:
+        status: {$ref: "#/components/schemas/Status"}
+        accounts: {type: array, items: {$ref: "#/components/schemas/Account"}}
+    Window:
+      type: object
+      required: [utilization]
+      properties:
+        utilization: {type: number, format: double}
+        resets_at: {type: string, format: date-time}
+    ModelWindow:
+      type: object
+      required: [name, utilization]
+      properties:
+        name: {type: string}
+        utilization: {type: number, format: double}
+        resets_at: {type: string, format: date-time}
+    Account:
+      type: object
+      required: [name, email, priority, enabled, needs_login, active, exhausted, models]
+      properties:
+        name: {type: string}
+        email: {type: string}
+        priority: {type: integer}
+        enabled: {type: boolean}
+        needs_login: {type: boolean}
+        active: {type: boolean}
+        exhausted: {type: boolean}
+        exhausted_reason: {type: string}
+        checked_at: {type: string, format: date-time}
+        error: {type: string}
+        leaves_at: {type: string, format: date-time, description: "Account in use only: when it reaches the five-hour, weekly or a per-model weekly threshold at its pace in use over the last hour, whichever comes first; absent when the pace is unknown or flat, or the window resets first"}
+        five_hour: {$ref: "#/components/schemas/Window"}
+        seven_day: {$ref: "#/components/schemas/Window"}
+        models:
+          type: array
+          items: {$ref: "#/components/schemas/ModelWindow"}
+    ImportRequest:
+      type: object
+      required: [name, config_dir]
+      properties:
+        name: {type: string}
+        config_dir: {type: string}
+        priority: {type: integer}
+    AdoptRequest:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string}
+        priority: {type: integer}
+    AccountPatch:
+      type: object
+      properties:
+        priority: {type: integer}
+        enabled: {type: boolean}
+    Strategy:
+      type: string
+      enum: [fill-first, cache-aware]
+      description: |
+        Both put a higher priority first.
+        fill-first: within a priority, the account with the most room; back to a higher priority as soon as it recovers.
+        cache-aware: back to a higher priority as soon as it recovers, like fill-first; within a priority, the account whose
+        weekly room (the week, per-model weeks) resets soonest, so it is spent before it is lost; the 5-hour window counts only
+        for running out. While prompt caches are warm it moves within a priority only
+        for room that resets within a day and at least an hour before the current account's; once Claude Code has been idle
+        for an hour the move is free.
+    Remote:
+      type: object
+      description: The ccswap usage is taken from; absent when this daemon asks Anthropic itself.
+      required: [url, ok]
+      properties:
+        url: {type: string}
+        ok: {type: boolean, description: The last ask got an answer}
+        error: {type: string, description: Why the last ask failed; accounts then ask Anthropic directly}
+        checked_at: {type: string, format: date-time, description: Last answer}
+    RemoteRequest:
+      type: object
+      required: [url]
+      properties:
+        url: {type: string, description: "https://..., or http to a loopback or private address; empty turns remote usage off"}
+        key: {type: string, description: The other ccswap's management key; omitted keeps the stored one}
+    LangRequest:
+      type: object
+      required: [lang]
+      properties:
+        lang: {type: string, description: 'A language code ("en", see /v1/i18n) pins the language of messages and notifications in config.toml; "" follows the locale'}
+    StrategyRequest:
+      type: object
+      required: [strategy]
+      properties:
+        strategy: {$ref: "#/components/schemas/Strategy"}
+    AutoRequest:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: {type: boolean}
+    SignalRequest:
+      type: object
+      required: [payload]
+      properties:
+        payload:
+          type: object
+          additionalProperties: true
+    WebCode:
+      type: object
+      required: [code, expires_at]
+      properties:
+        code: {type: string}
+        expires_at: {type: string, format: date-time}
+    Catalog:
+      type: object
+      required: [lang, name, languages, messages]
+      properties:
+        lang: {type: string}
+        name: {type: string, description: The language's name in itself}
+        languages: {type: array, items: {$ref: "#/components/schemas/Language"}, description: Every language ccswap has}
+        messages:
+          type: object
+          additionalProperties: true
+          description: >-
+            Text by key: a string with {0} {1} … placeholders, **bold** and `code` marks, or a plural message as its
+            CLDR forms ({"one": …, "other": …}), picked by argument 0
+    Language:
+      type: object
+      required: [code, name]
+      properties:
+        code: {type: string}
+        name: {type: string}
+    WebSessionRequest:
+      type: object
+      required: [code]
+      properties:
+        code: {type: string}
+    WebSession:
+      type: object
+      required: [key]
+      properties:
+        key: {type: string, description: The admin key; the page keeps it for its tab only}
+    MigrateExportRequest:
+      type: object
+      required: [names]
+      properties:
+        names: {type: array, items: {type: string}, minItems: 1}
+    MigrateExport:
+      type: object
+      required: [token, bundle, code, expires_at]
+      properties:
+        token: {type: string, description: Names this export to /v1/migrate/commit and /v1/migrate/cancel}
+        bundle: {type: string, description: The encrypted accounts as ASCII armor}
+        code: {type: string, description: "The one-time code that opens the bundle; show it once, never store it"}
+        expires_at: {type: string, format: date-time, description: The export is cancelled if not committed by then}
+    MigrateTokenRequest:
+      type: object
+      required: [token]
+      properties:
+        token: {type: string}
+    MigrateImportRequest:
+      type: object
+      required: [bundle, code, replace]
+      properties:
+        bundle: {type: string}
+        code: {type: string}
+        replace: {type: boolean, description: Replace the login of an account here with the same email}
+    MigrateImport:
+      type: object
+      required: [accounts]
+      properties:
+        accounts: {type: array, items: {$ref: "#/components/schemas/Account"}}

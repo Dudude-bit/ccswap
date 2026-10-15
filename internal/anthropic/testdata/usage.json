@@ -1,0 +1,10 @@
+{
+  "five_hour": {"utilization": 42, "resets_at": "2026-10-13T18:00:00Z"},
+  "seven_day": {"utilization": 17.5, "resets_at": "2026-10-18T00:00:00Z"},
+  "seven_day_opus": {"utilization": 98, "resets_at": null},
+  "seven_day_sonnet": null,
+  "limits": [
+    {"kind": "weekly_scoped", "percent": 60, "resets_at": "2026-10-18T00:00:00Z", "scope": {"model": {"display_name": "Fable"}}},
+    {"kind": "other", "percent": 99, "resets_at": "2026-10-18T00:00:00Z"}
+  ]
+}

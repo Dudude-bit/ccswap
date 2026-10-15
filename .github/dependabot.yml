@@ -1,0 +1,12 @@
+# Moves the commit-SHA action pins and the Go modules forward. After a module update, run
+# `make generate` on the pull request: THIRD_PARTY_LICENSES follows go.mod, and CI checks it.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly

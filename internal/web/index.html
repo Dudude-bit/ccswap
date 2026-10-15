@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<title>ccswap</title>
+<!-- The mark on the light board: tags 5 and 0 in hex, as an icon cannot read the page's CSS. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='1' y='5' width='22' height='13' rx='2.5' fill='%233d6ad6'/%3E%3Crect x='8' y='13' width='23' height='14' rx='3' fill='%23d4621c' stroke='%23f4f5f2' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="app.css">
+<script src="i18n.js" defer></script>
+<script src="app.js" defer></script>
+</head>
+<body>
+<svg width="0" height="0" class="defs" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 32 32"><rect class="m1" x="1" y="5" width="22" height="13" rx="2.5"/><rect class="m2" x="8" y="13" width="23" height="14" rx="3"/></symbol>
+</svg>
+
+<div id="boot" class="boot" role="status" hidden>
+  <svg class="mark mark-lg" viewBox="0 0 32 32" aria-hidden="true"><rect class="m1" x="1" y="5" width="22" height="13" rx="2.5"/><rect class="m2" x="8" y="13" width="23" height="14" rx="3"/></svg>
+  <p id="boot-msg" class="boot-msg">Connecting…</p>
+</div>
+
+<section id="auth" class="auth" hidden aria-labelledby="auth-h">
+  <div class="auth-col">
+    <p class="brand"><svg class="mark" aria-hidden="true"><use href="#mark"/></svg><span class="word">ccswap</span></p>
+    <form id="auth-form" class="auth-card" novalidate>
+      <h1 id="auth-h" data-t="auth.title"></h1>
+      <p class="auth-sub" data-t="auth.sub"></p>
+      <div class="field">
+        <label for="auth-key" data-t="auth.key"></label>
+        <div class="secret">
+          <input id="auth-key" class="input" type="password" autocomplete="current-password" autocapitalize="off" spellcheck="false" data-t-ph="auth.keyPh" aria-describedby="auth-hint auth-err">
+          <button type="button" id="auth-eye" class="eye" aria-pressed="false">
+            <svg class="ico show" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+            <svg class="ico hide" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-2.4 3.3M6.6 6.6C3.7 8.6 2 12 2 12s3.6 7 10 7a10 10 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2M2 2l20 20"/></svg>
+          </button>
+        </div>
+        <p id="auth-err" class="field-err" role="alert" hidden></p>
+        <p id="auth-hint" class="hint"></p>
+      </div>
+      <label class="check"><input type="checkbox" id="auth-remember"><span data-t="auth.remember"></span></label>
+      <button type="submit" id="auth-submit" class="btn btn-primary btn-full"><span class="spin" aria-hidden="true"></span><span class="label" data-t="auth.submit"></span></button>
+      <p id="auth-addr" class="auth-addr"></p>
+    </form>
+    <div class="lang-switch" hidden><select class="sel" data-t-label="lang.label"></select><p class="field-err" role="alert" hidden></p></div>
+  </div>
+</section>
+
+<div id="dash" class="dash" hidden>
+  <header class="top">
+    <div class="top-id">
+      <h1 class="brand"><svg class="mark" aria-hidden="true"><use href="#mark"/></svg><span class="word">ccswap</span></h1>
+      <span id="where" class="where"></span>
+    </div>
+    <p id="live" class="live"><i class="dot" aria-hidden="true"></i><span id="live-text"></span></p>
+    <div class="top-ctl">
+      <label class="ctl-field admin"><span data-t="auto"></span><input type="checkbox" id="auto" class="switch" role="switch"></label>
+      <label class="ctl-field admin"><span data-t="strategy.label"></span>
+        <select id="strategy" class="sel"><option value="cache-aware" data-t="strategy.cache"></option><option value="fill-first" data-t="strategy.fill"></option></select>
+      </label>
+      <span id="auto-ro" class="ro-val viewer"></span>
+      <button type="button" id="refresh" class="btn admin" data-t-title="refresh.title">
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>
+        <span class="label" data-t="refresh"></span>
+      </button>
+      <div class="lang-switch" hidden><select class="sel" data-t-label="lang.label"></select><p class="field-err" role="alert" hidden></p></div>
+      <button type="button" id="forget" class="btn btn-quiet" data-t="logout"></button>
+    </div>
+  </header>
+
+  <main id="main" class="main">
+    <div class="msgs">
+      <div id="banner" class="alert" role="alert" hidden></div>
+      <div id="alerts"></div>
+      <div id="hero-err" class="strip crit" role="alert" hidden></div>
+      <div id="draw-err" class="strip crit fault" role="alert" hidden></div>
+      <p id="host-note" class="note" hidden></p>
+      <p id="ro-note" class="note" hidden data-t="ro.note"></p>
+    </div>
+
+    <div class="skel" aria-hidden="true">
+      <div class="sk-lead"><i class="sk sk-duty"></i><i class="sk sk-next"></i></div>
+      <i class="sk sk-head"></i>
+      <i class="sk sk-rota"></i>
+      <i class="sk sk-head"></i>
+      <i class="sk sk-row"></i><i class="sk sk-row"></i><i class="sk sk-row"></i>
+    </div>
+
+    <div id="board" class="board">
+      <section id="lead" class="lead">
+        <article id="duty" class="duty" aria-labelledby="duty-h">
+          <h2 id="duty-h" class="sr-only" data-t="duty.title"></h2>
+          <div id="d-on">
+            <div class="who">
+              <span id="d-tag" class="tag"></span>
+              <div class="who-text"><p id="d-since"></p><p id="d-mail" class="mut"></p></div>
+              <dl id="d-models" class="models"></dl>
+            </div>
+            <div class="gauges">
+              <div id="g-five" class="gauge">
+                <div class="g-head"><span class="g-label mut"></span><span class="g-reset"></span></div>
+                <p class="g-num"><span class="n"></span><small>%</small></p>
+                <div class="bar" role="meter" aria-valuemin="0" aria-valuemax="100"><i class="fill"></i><u class="tick"></u></div>
+                <p class="g-tick"><span></span></p>
+              </div>
+              <div id="g-week" class="gauge">
+                <div class="g-head"><span class="g-label mut"></span><span class="g-reset"></span></div>
+                <p class="g-num"><span class="n"></span><small>%</small></p>
+                <div class="bar" role="meter" aria-valuemin="0" aria-valuemax="100"><i class="fill"></i><u class="tick"></u></div>
+                <p class="g-tick"><span></span></p>
+              </div>
+            </div>
+            <p id="d-note" class="d-note" hidden></p>
+          </div>
+          <div id="d-off" class="d-off" hidden>
+            <span class="tag tag-empty" aria-hidden="true"></span>
+            <div><p id="d-off-h" class="d-off-h"></p><p id="d-off-p" class="mut"></p></div>
+          </div>
+        </article>
+        <aside id="next" class="handover" aria-labelledby="next-h">
+          <div class="h-head"><h2 id="next-h" data-t="next.title"></h2><span id="n-proj" class="mut" data-t="next.projected"></span></div>
+          <p id="n-hand" class="hand"></p>
+          <p id="n-pace" class="mut"></p>
+          <p id="n-rule"></p>
+          <dl class="th">
+            <div><dt data-t="th.five"></dt><dd id="th-five"></dd></div>
+            <div><dt data-t="th.week"></dt><dd id="th-week"></dd></div>
+            <div><dt data-t="th.hyst"></dt><dd id="th-hyst"></dd></div>
+            <div><dt data-t="th.dwell"></dt><dd id="th-dwell"></dd></div>
+          </dl>
+        </aside>
+      </section>
+
+      <section id="empty" class="empty" hidden aria-labelledby="empty-h">
+        <div class="empty-art" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div>
+          <h2 id="empty-h" data-t="empty.title"></h2>
+          <p id="empty-p"></p>
+          <p class="mut" data-t="empty.how"></p>
+        </div>
+      </section>
+
+      <section id="rota-sec" class="sec" aria-labelledby="rota-h">
+        <div class="sec-head">
+          <h2 id="rota-h" data-t="rota.title"></h2>
+          <p class="sec-sub" data-t="rota.sub"></p>
+          <ul class="legend">
+            <li><i class="lg-on"></i><span data-t="legend.on"></span></li>
+            <li><i class="lg-proj"></i><span data-t="legend.proj"></span></li>
+            <li><i class="lg-next"></i><span data-t="legend.next"></span></li>
+            <li><i class="lg-rest"></i><span data-t="legend.rest"></span></li>
+            <li><i class="lg-login"></i><span data-t="legend.login"></span></li>
+            <li><i class="lg-off"></i><span data-t="legend.off"></span></li>
+          </ul>
+        </div>
+        <div id="rota" class="rota">
+          <div class="r-scale" aria-hidden="true"><div id="rota-flags" class="r-flags"></div><div id="rota-hours" class="r-hours"></div></div>
+          <div class="r-body">
+            <div id="rota-grid" class="r-grid" aria-hidden="true"></div>
+            <div id="rota-lanes" class="r-lanes" role="list" data-t-label="rota.title"></div>
+            <div class="r-top" aria-hidden="true"><div id="rota-marks"></div><i id="puck" class="puck" hidden></i></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="acct-sec" class="sec" aria-labelledby="acct-h">
+        <div class="sec-head"><h2 id="acct-h" data-t="accts.title"></h2><p class="sec-sub"><span id="acct-count"></span> · <span data-t="accts.order"></span></p></div>
+        <table id="accounts" class="accts">
+          <thead>
+            <tr>
+              <th scope="col" data-t="col.account"></th>
+              <th scope="col" data-t="col.state"></th>
+              <th scope="col" data-t="col.five"></th>
+              <th scope="col" data-t="col.week"></th>
+              <th scope="col" class="c-models" data-t="col.models"></th>
+              <th scope="col" data-t="col.next"></th>
+              <th scope="col" data-t="col.prio"></th>
+              <th scope="col" class="admin" data-t="col.auto" data-t-title="col.autoTitle"></th>
+              <th scope="col" class="admin"><span class="sr-only" data-t="col.switch"></span></th>
+            </tr>
+          </thead>
+        </table>
+      </section>
+
+      <section class="sec" aria-labelledby="rules-h">
+        <div class="sec-head"><h2 id="rules-h" data-t="rules.title"></h2><p class="sec-sub" data-t="rules.sub"></p></div>
+        <div class="policy">
+          <form id="rules" class="rules" novalidate>
+            <div class="field">
+              <label for="r-five" data-t="rules.five"></label>
+              <div class="unit"><input id="r-five" class="input" name="five_hour" type="number" inputmode="decimal" min="0" max="100" step="any" aria-describedby="r-five-err"><span data-t="rules.used"></span></div>
+              <p id="r-five-err" class="field-err" hidden></p>
+            </div>
+            <div class="field">
+              <label for="r-week" data-t="rules.week"></label>
+              <div class="unit"><input id="r-week" class="input" name="seven_day" type="number" inputmode="decimal" min="0" max="100" step="any" aria-describedby="r-week-hint r-week-err"><span data-t="rules.used"></span></div>
+              <p id="r-week-hint" class="hint" data-t="rules.weekHint"></p>
+              <p id="r-week-err" class="field-err" hidden></p>
+            </div>
+            <div class="field">
+              <label for="r-hyst" data-t="rules.hyst"></label>
+              <div class="unit"><input id="r-hyst" class="input" name="hysteresis" type="number" inputmode="decimal" min="0" step="any" aria-describedby="r-hyst-hint r-hyst-err"><span data-t="rules.points"></span></div>
+              <p id="r-hyst-hint" class="hint" data-t="rules.hystHint"></p>
+              <p id="r-hyst-err" class="field-err" hidden></p>
+            </div>
+            <div class="field">
+              <label for="r-dwell" data-t="rules.dwell"></label>
+              <div class="unit"><input id="r-dwell" class="input" name="min_dwell" type="number" inputmode="decimal" min="0" step="any" aria-describedby="r-dwell-hint r-dwell-err"><span data-t="rules.min"></span></div>
+              <p id="r-dwell-hint" class="hint" data-t="rules.dwellHint"></p>
+              <p id="r-dwell-err" class="field-err" hidden></p>
+            </div>
+            <div class="field">
+              <label for="r-act" data-t="rules.act"></label>
+              <div class="unit"><input id="r-act" class="input" name="check_active" type="number" inputmode="decimal" min="1" step="any" aria-describedby="r-act-hint r-act-err"><span data-t="rules.min"></span></div>
+              <p id="r-act-hint" class="hint" data-t="rules.actHint"></p>
+              <p id="r-act-err" class="field-err" hidden></p>
+            </div>
+            <div class="field">
+              <label for="r-oth" data-t="rules.oth"></label>
+              <div class="unit"><input id="r-oth" class="input" name="check_others" type="number" inputmode="decimal" min="1" step="any" aria-describedby="r-oth-hint r-oth-err"><span data-t="rules.min"></span></div>
+              <p id="r-oth-hint" class="hint" data-t="rules.othHint"></p>
+              <p id="r-oth-err" class="field-err" hidden></p>
+            </div>
+            <div class="form-actions admin">
+              <button type="submit" id="r-save" class="btn btn-primary" disabled><span class="spin" aria-hidden="true"></span><span class="label" data-t="rules.save"></span></button>
+              <button type="button" id="r-reset" class="btn btn-quiet" hidden data-t="rules.discard"></button>
+              <p id="r-status" class="hint" role="status"></p>
+            </div>
+            <div id="r-err" class="strip crit" role="alert" hidden></div>
+          </form>
+          <aside id="how" class="how" aria-labelledby="how-h">
+            <h3 id="how-h" data-t="how.title"></h3>
+            <p id="how-off" class="how-off" hidden data-t="how.off"></p>
+            <dl>
+              <div><dt><i class="g g-leave" aria-hidden="true"></i><span data-t="how.leaveT"></span></dt><dd id="how-leave"></dd></div>
+              <div><dt><i class="g g-back" aria-hidden="true"></i><span data-t="how.backT"></span></dt><dd id="how-back"></dd></div>
+              <div><dt><i class="g g-stay" aria-hidden="true"></i><span data-t="how.stayT"></span></dt><dd id="how-stay"></dd></div>
+              <div><dt><i class="g g-pick" aria-hidden="true"></i><span data-t="how.pickT"></span></dt><dd><span id="how-pick"></span> <span id="how-cache" class="mut"></span></dd></div>
+            </dl>
+          </aside>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<template id="acct-tpl">
+  <tbody class="acct">
+    <tr class="row">
+      <th scope="row" class="c-acct"><span class="chip" aria-hidden="true"></span><span class="acc-who"><b class="nm"></b> <span class="mail"></span></span></th>
+      <td class="c-state"><span class="sw" aria-hidden="true"></span><span class="st"><b></b> <span class="st2"></span></span></td>
+      <td class="c-use" data-col="col.five"></td>
+      <td class="c-use" data-col="col.week"></td>
+      <td class="c-models" data-col="col.models"></td>
+      <td class="c-next" data-col="col.next"></td>
+      <td class="c-prio" data-col="col.prio">
+        <span class="stepper">
+          <button type="button" class="step admin" data-step="-1"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg></button>
+          <input type="number" inputmode="numeric" step="1">
+          <button type="button" class="step admin" data-step="1"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg></button>
+        </span>
+      </td>
+      <td class="c-auto admin" data-col="col.auto"><input type="checkbox" class="switch enabled" role="switch"></td>
+      <td class="c-act admin"><button type="button" class="btn use"><span class="spin" aria-hidden="true"></span><span class="label"></span></button><span class="cur" data-t="row.inUse" hidden></span></td>
+    </tr>
+    <tr class="row-msg" hidden><td colspan="9"><p class="row-note" hidden></p><div class="strip msg" role="alert" hidden></div></td></tr>
+  </tbody>
+</template>
+</body>
+</html>

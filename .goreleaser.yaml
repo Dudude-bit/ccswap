@@ -1,0 +1,25 @@
+version: 2
+project_name: ccswap
+builds:
+  - main: ./cmd/ccswap
+    binary: ccswap
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux]
+    goarch: [arm64, amd64]
+    # No build machine paths in the binary, and a file time that comes from the commit.
+    flags: [-trimpath]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    # The tag, v included, as make build (git describe) and go install …@vX report it.
+    ldflags: ["-s -w -X main.version={{.Tag}}"]
+archives:
+  - formats: [tar.gz]
+    name_template: "ccswap_{{.Version}}_{{.Os}}_{{.Arch}}"
+    files: [LICENSE, AUTHORS, THIRD_PARTY_LICENSES, README*.md]
+checksum:
+  name_template: checksums.txt
+changelog:
+  use: git
+release:
+  github:
+    owner: Dudude-bit
+    name: ccswap

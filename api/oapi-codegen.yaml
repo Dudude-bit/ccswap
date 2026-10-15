@@ -1,0 +1,10 @@
+package: api
+output: api.gen.go
+generate:
+  models: true
+  fiber-v3-server: true
+  strict-server: true
+  client: true
+  embedded-spec: true
+output-options:
+  skip-prune: true # Snapshot is only the data of /v1/events
