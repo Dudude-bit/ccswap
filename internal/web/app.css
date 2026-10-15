@@ -612,7 +612,9 @@ body:not(.ro) .viewer { display: none !important; }
 .unit span { color: var(--mut); white-space: nowrap; }
 .form-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; }
 .rules .strip { grid-column: 1 / -1; }
-.ro .rules .input { min-width: 2ch; padding: 0; border-color: transparent; background: none; font-weight: 500; font-size: 16px; }
+.ro .rules .input { min-width: 2ch; padding: 0; border-color: transparent; background: none; font-weight: 500; font-size: 16px; -moz-appearance: textfield; appearance: textfield; }
+/* The box is sized to the digits (readOnly in app.js), so the number spinner must not take room inside it. */
+.ro .rules .input::-webkit-inner-spin-button, .ro .rules .input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .ro .rules .unit { gap: 2px; }
 
 .how { padding: 16px 20px; border: 1px solid var(--edge); border-radius: 6px; }
