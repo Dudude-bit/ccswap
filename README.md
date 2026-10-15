@@ -45,6 +45,7 @@ ccswap adopt work
 - [Languages](#languages)
 - [Troubleshooting](#troubleshooting)
 - [Security](#security)
+- [Why not a proxy](#why-not-a-proxy)
 - [Related projects](#related-projects)
 - [Contributing and licence](#contributing-and-licence)
 
@@ -613,6 +614,29 @@ ccswap holds the logins of several accounts and runs a local HTTP listener. In s
 
 [SECURITY.md](SECURITY.md) has the full list of what is stored where, and how to report a vulnerability
 privately.
+
+## Why not a proxy
+
+A proxy such as [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) holds several logins and
+serves them as an API to any client. That is a different job from ccswap's, and it brings three things
+ccswap avoids:
+
+- **A server in the middle of every request.** All of Claude Code's traffic, code included, passes
+  through it, and while it is down Claude Code does not work.
+- **Other programs on a subscription login.** Any OpenAI-, Gemini- or Claude-compatible client can use
+  the proxy. By default CLIProxyAPI makes such requests look like Claude Code: it sends Claude Code's
+  user agent and headers and replaces the system prompt (`disable-claude-cloak-mode` in its
+  `config.example.yaml`). Anthropic's [Claude Code terms](https://code.claude.com/docs/en/legal-and-compliance)
+  say subscription OAuth is meant for Claude Code and Anthropic's native apps, and that third-party
+  developers may not route requests through Free, Pro or Max plan credentials.
+- **A prompt cache split across accounts.** The cache is not shared between organizations, and each
+  subscription has its own. CLIProxyAPI's default `round-robin` routing sends one session's requests to
+  different accounts, so each one reads the context again without the cache; its `session-affinity`
+  is off by default.
+
+ccswap leaves requests alone. The unmodified Claude Code talks to Anthropic, and ccswap only changes
+which of your accounts it is logged in to. A switch resets the cache once, so ccswap switches near a
+limit or when you ask, not per request. ccswap is still unofficial; see [Terms of use](#terms-of-use).
 
 ## Related projects
 
