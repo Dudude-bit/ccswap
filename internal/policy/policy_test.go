@@ -257,6 +257,10 @@ func TestFreeAt(t *testing.T) {
 	if at, ok := FreeAt(acct("x", 1, h5(10)), th, now); !ok || !at.Equal(now) {
 		t.Errorf("not blocked: %v %v", at, ok)
 	}
+	exact := 3*time.Hour + 123*time.Millisecond // the page matches it to the window's own reset
+	if at, ok := FreeAt(acct("x", 1, h5r(99, exact)), th, now); !ok || !at.Equal(now.Add(exact)) {
+		t.Errorf("reset at %v, free at %v", now.Add(exact), at)
+	}
 }
 
 func TestDecideCacheAware(t *testing.T) {

@@ -213,7 +213,9 @@ limit and a reset), with three guards:
 - When fresh numbers show the named window under 80%, the signal is ignored: the session ran on another
   login, such as a session with its own token, whose environment the hook may not see.
 
-A repeated signal does not extend the hour.
+When the message names its window and that window's reset is known and less than an hour away, the mark
+ends at the reset instead: an hour would outlast it, and with every account at its limit ccswap would move
+to one that resets later. A repeated signal does not extend the mark.
 
 ## The daemon and its API
 

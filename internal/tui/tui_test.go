@@ -91,11 +91,12 @@ func win(u float64, reset time.Time) *api.Window {
 
 func fixture() *fake {
 	t := time.Now().Add(2 * time.Hour)
+	free := t.Add(time.Hour) // a limit hit outlasts the window
 	return &fake{
 		st: api.Status{Active: "work", Auto: true, Strategy: api.CacheAware, Thresholds: api.Thresholds{FiveHour: 95, SevenDay: 98}},
 		accts: []api.Account{
 			{Name: "work", Email: "work@example.com", Active: true, Enabled: true, FiveHour: win(71, t), SevenDay: win(20, t)},
-			{Name: "home", Email: "home@example.com", Enabled: true, FiveHour: win(96, t), SevenDay: win(50, t), Exhausted: true},
+			{Name: "home", Email: "home@example.com", Enabled: true, FiveHour: win(96, t), SevenDay: win(50, t), Exhausted: true, FreeAt: &free},
 			{Name: "side", Email: "side@example.com", Enabled: true, NeedsLogin: true},
 			{Name: "old", Email: "old@example.com", Enabled: false, FiveHour: win(5, t), SevenDay: win(8, t)},
 		},
@@ -148,11 +149,12 @@ func run(t *testing.T, m tea.Model, cmd tea.Cmd) tea.Model {
 }
 
 func TestWideViewShowsEveryState(t *testing.T) {
-	v := text(loadedAt(t, fixture(), 100))
+	f := fixture()
+	v := text(loadedAt(t, f, 100))
 	t.Log("\n" + v)
 	for _, want := range []string{"ccswap", i18n.T("tui.auto") + " " + i18n.T("tui.on"), i18n.T("tui.strategy") + " cache-aware",
 		i18n.T("tui.accounts"), i18n.T("tui.five_hours_left"), i18n.T("tui.col_reset"), "▶ work", "29%", i18n.T("tui.in_hours", 2),
-		"✕ " + i18n.T("tui.out_until", ""), "✕ " + i18n.T("tui.needs_login"), i18n.T("tui.disabled"), "▶ " + i18n.T("tui.in_use"),
+		"✕ " + i18n.T("tui.out_until", clock(*f.accts[1].FreeAt, time.Now())), "✕ " + i18n.T("tui.needs_login"), i18n.T("tui.disabled"), "▶ " + i18n.T("tui.in_use"),
 		"→ " + i18n.T("tui.next"), "work  " + i18n.T("tui.in_use"), "work@example.com", "↑↓ " + i18n.T("tui.select"),
 		"+ - " + i18n.T("tui.priority"), "? " + i18n.T("tui.all_keys")} {
 		if !strings.Contains(v, want) {

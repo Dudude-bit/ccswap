@@ -198,34 +198,24 @@ func worthLeaving(a, cur AccountState, now time.Time, idle time.Duration) bool {
 	return dc.IsZero() || dc.Sub(da) >= CacheTTL
 }
 
-// freeAt is when the account stops being blocked; +Inf marks an unknown reset.
-func freeAt(a AccountState, th config.Thresholds, now time.Time) float64 {
-	t := math.Inf(-1)
+// FreeAt is when a stops being blocked (now when it is not); ok=false when a blocking window has no reset time.
+func FreeAt(a AccountState, th config.Thresholds, now time.Time) (time.Time, bool) {
+	t := now
 	if now.Before(a.LimitHitUntil) {
-		t = float64(a.LimitHitUntil.UnixNano())
+		t = a.LimitHitUntil
 	}
 	for _, l := range counting(a, th, now) {
 		if l.w.Utilization < l.threshold {
 			continue
 		}
 		if l.w.ResetsAt.IsZero() {
-			return math.Inf(1)
+			return time.Time{}, false
 		}
-		t = max(t, float64(l.w.ResetsAt.UnixNano()))
+		if l.w.ResetsAt.After(t) {
+			t = l.w.ResetsAt
+		}
 	}
-	return t
-}
-
-// FreeAt is when a stops being blocked (now when it is not); ok=false when a blocking window has no reset time.
-func FreeAt(a AccountState, th config.Thresholds, now time.Time) (time.Time, bool) {
-	switch f := freeAt(a, th, now); {
-	case math.IsInf(f, 1):
-		return time.Time{}, false
-	case math.IsInf(f, -1):
-		return now, true
-	default:
-		return time.Unix(0, int64(f)), true
-	}
+	return t, true
 }
 
 // Decide picks the next switch; idle is how long Claude Code has made no request (0 when unknown).
@@ -281,23 +271,21 @@ func Next(now time.Time, accts []AccountState, active string, th config.Threshol
 }
 
 func allExhausted(now time.Time, accts []AccountState, cur AccountState, loginOK bool, th config.Thresholds) Decision {
-	own := math.Inf(1)
+	var own time.Time // zero: never, as with an unknown reset
 	if loginOK {
-		own = freeAt(cur, th, now)
+		own, _ = FreeAt(cur, th, now)
 	}
 	var pick AccountState
-	pickAt := math.Inf(1)
-	found := false
+	var pickAt time.Time
 	for _, a := range accts {
 		if a.Name == cur.Name || !a.Enabled || a.NeedsLogin || !Fresh(a, now) {
 			continue
 		}
-		at := freeAt(a, th, now)
-		if !found || at < pickAt || (at == pickAt && a.Priority > pick.Priority) {
-			pick, pickAt, found = a, at, true
+		if at, ok := FreeAt(a, th, now); ok && (pickAt.IsZero() || at.Before(pickAt) || at.Equal(pickAt) && a.Priority > pick.Priority) {
+			pick, pickAt = a, at
 		}
 	}
-	if found && pickAt < own {
+	if sooner(pickAt, own) {
 		return Decision{pick.Name, ReasonAllExhausted}
 	}
 	return Decision{"", ReasonAllExhausted}
