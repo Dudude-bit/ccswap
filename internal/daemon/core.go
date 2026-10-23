@@ -1219,6 +1219,9 @@ func (d *Daemon) limitHit(ctx context.Context, msg string) {
 	if d.holder != "" && now.Sub(st.LastSwitchAt) >= signalGrace { // the account in the entry
 		if u := d.acct(d.holder); !now.Before(u.limitHitUntil) && !d.farFromLimit(u, msg, now) { // retries must not extend it
 			u.limitHitUntil = now.Add(limitBackoff)
+			if w := named(u, msg); w != nil && w.ResetsAt.After(now) && w.ResetsAt.Before(u.limitHitUntil) {
+				u.limitHitUntil = w.ResetsAt // longer, it would hide the reset from the all-exhausted pick
+			}
 		}
 	}
 }
@@ -1255,28 +1258,28 @@ var limitName = regexp.MustCompile(`^You've hit your (\w+) limit`)
 // hooks without CLAUDE_CODE_OAUTH_TOKEN (a session on its own token, e.g. an agent runner's).
 // Unknown wording, or usage older than signalAge: false, and the signal counts.
 func (d *Daemon) farFromLimit(u *acctUsage, msg string, now time.Time) bool {
+	w := named(u, msg)
+	return w != nil && now.Sub(u.checkedAt) <= d.signalAge() && w.Utilization < 80
+}
+
+// named is u's window that msg says is at its limit; nil for unknown wording or a window u has no numbers for.
+func named(u *acctUsage, msg string) *anthropic.Window {
 	m := limitName.FindStringSubmatch(msg)
-	if m == nil || now.Sub(u.checkedAt) > d.signalAge() {
-		return false
+	if m == nil {
+		return nil
 	}
-	var util *float64
 	switch m[1] {
 	case "session":
-		if u.fiveHour != nil {
-			util = &u.fiveHour.Utilization
-		}
+		return u.fiveHour
 	case "weekly":
-		if u.sevenDay != nil {
-			util = &u.sevenDay.Utilization
-		}
-	default:
-		for i := range u.models {
-			if strings.EqualFold(u.models[i].Name, m[1]) {
-				util = &u.models[i].Utilization
-			}
+		return u.sevenDay
+	}
+	for i := range u.models {
+		if strings.EqualFold(u.models[i].Name, m[1]) {
+			return &u.models[i].Window
 		}
 	}
-	return util != nil && *util < 80
+	return nil
 }
 
 // usageLimit tells a subscription limit ("…limit… resets 3pm") from other 429s ("temporary capacity").
@@ -1315,8 +1318,12 @@ func (d *Daemon) view(st store.State, a store.Account) api.Account {
 	v := api.Account{Name: a.Name, Email: a.Email, Priority: a.Priority, Enabled: a.Enabled, NeedsLogin: a.NeedsLogin,
 		Active: active, Models: []api.ModelWindow{}, CheckedAt: timePtr(u.checkedAt), LeavesAt: timePtr(leaves),
 		FiveHour: window(u.fiveHour), SevenDay: window(u.sevenDay)}
-	if r := policy.ExhaustedBy(stateOf(a, &u), d.th(), d.o.Now()); r != "" {
+	s, now := stateOf(a, &u), d.o.Now()
+	if r := policy.ExhaustedBy(s, d.th(), now); r != "" {
 		v.Exhausted, v.ExhaustedReason, v.LeavesAt = true, &r, nil // leaving already
+		if at, ok := policy.FreeAt(s, d.th(), now); ok {
+			v.FreeAt = &at
+		}
 	}
 	if u.err != "" {
 		v.Error = &u.err

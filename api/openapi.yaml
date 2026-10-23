@@ -376,6 +376,7 @@ components:
         active: {type: boolean}
         exhausted: {type: boolean}
         exhausted_reason: {type: string}
+        free_at: {type: string, format: date-time, description: "Exhausted accounts only: when auto-switch counts the account free again, the latest reset of the windows at their thresholds or the end of a limit hit, whichever is later; absent when a blocking window's reset is unknown"}
         checked_at: {type: string, format: date-time}
         error: {type: string}
         leaves_at: {type: string, format: date-time, description: "Account in use only: when it reaches the five-hour, weekly or a per-model weekly threshold at its pace in use over the last hour, whichever comes first; absent when the pace is unknown or flat, or the window resets first"}

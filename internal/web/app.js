@@ -238,24 +238,16 @@ function windows(a) {
   ];
 }
 
-// freeAt is when a resting account is back, as the daemon's policy has it: the latest reset of the windows
-// at their threshold, with the window that sets it; null when that time is unknown.
+// freeAt is when a resting account is back, as the daemon counts it, with the window at its threshold that resets
+// then (none when a limit hit lasts longer); null when that time is unknown or has passed.
 function freeAt(a) {
-  let out = null;
-  for (const x of windows(a)) {
-    const at = x.w?.resets_at ? new Date(x.w.resets_at) : null;
-    if (!x.w || x.w.utilization < x.limit || (at && at <= Date.now())) continue;
-    if (!at) return null;
-    if (!out || at > out.at) out = { at, x };
-  }
-  return out;
+  const at = a.free_at && new Date(a.free_at);
+  if (!at || at <= Date.now()) return null;
+  return { at, x: windows(a).find((x) => x.w?.resets_at && +new Date(x.w.resets_at) === +at && x.w.utilization >= x.limit) };
 }
 
-// waiting is whether every window that blocks a resting account has reset already: the next check frees it.
-function waiting(a) {
-  const over = windows(a).filter((x) => x.w && x.w.utilization >= x.limit);
-  return over.length > 0 && over.every((x) => x.w.resets_at && new Date(x.w.resets_at) <= Date.now());
-}
+// waiting is whether a resting account's time to be back has passed already: the next check frees it.
+const waiting = (a) => Boolean(a.free_at) && new Date(a.free_at) <= Date.now();
 
 // closest is the window nearest its threshold: the one auto-switch leaves a for, as things stand.
 const closest = (a) => windows(a).filter((x) => x.w).sort((p, q) => (p.limit - p.w.utilization) - (q.limit - q.w.utilization))[0];
@@ -761,8 +753,11 @@ function fillLane(l, a, { x, from, to, now, leaves }) {
         break;
       }
       const r = seg('rest', now, f ? Math.min(+f.at, to) : to);
-      if (f && +f.at <= to) note([nextChange(a, kind), h('span', 'm', ` · ${f.x.short} ${pct(f.x.w.utilization)}`)], f.at, { before: now, short: clock(f.at) });
-      else {
+      if (f && +f.at <= to) {
+        const words = [nextChange(a, kind)];
+        if (f.x) words.push(h('span', 'm', ` · ${f.x.short} ${pct(f.x.w.utilization)}`));
+        note(words, f.at, { before: now, short: clock(f.at) });
+      } else {
         r?.classList.add('cut');
         note([nextChange(a, kind)], to, { side: 'before', before: now, short: f && clock(f.at) });
       }
