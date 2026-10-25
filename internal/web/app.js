@@ -238,24 +238,16 @@ function windows(a) {
   ];
 }
 
-// freeAt is when a resting account is back, as the daemon's policy has it: the latest reset of the windows
-// at their threshold, with the window that sets it; null when that time is unknown.
+// freeAt is when a resting account is back, as the daemon counts it, with the window at its threshold that resets
+// then (none when a limit hit lasts longer); null when that time is unknown or has passed.
 function freeAt(a) {
-  let out = null;
-  for (const x of windows(a)) {
-    const at = x.w?.resets_at ? new Date(x.w.resets_at) : null;
-    if (!x.w || x.w.utilization < x.limit || (at && at <= Date.now())) continue;
-    if (!at) return null;
-    if (!out || at > out.at) out = { at, x };
-  }
-  return out;
+  const at = a.free_at && new Date(a.free_at);
+  if (!at || at <= Date.now()) return null;
+  return { at, x: windows(a).find((x) => x.w?.resets_at && +new Date(x.w.resets_at) === +at && x.w.utilization >= x.limit) };
 }
 
-// waiting is whether every window that blocks a resting account has reset already: the next check frees it.
-function waiting(a) {
-  const over = windows(a).filter((x) => x.w && x.w.utilization >= x.limit);
-  return over.length > 0 && over.every((x) => x.w.resets_at && new Date(x.w.resets_at) <= Date.now());
-}
+// waiting is whether a resting account's time to be back has passed already: the next check frees it.
+const waiting = (a) => Boolean(a.free_at) && !freeAt(a);
 
 // closest is the window nearest its threshold: the one auto-switch leaves a for, as things stand.
 const closest = (a) => windows(a).filter((x) => x.w).sort((p, q) => (p.limit - p.w.utilization) - (q.limit - q.w.utilization))[0];
@@ -464,8 +456,9 @@ function renderAlerts() {
   const st = state.status, specs = [];
   const usable = state.accounts.filter((a) => a.enabled && !a.needs_login);
   if (usable.length && usable.every((a) => a.exhausted)) {
-    const first = usable.map((a) => ({ a, f: freeAt(a) })).filter((x) => x.f).sort((p, q) => p.f.at - q.f.at)[0];
-    specs.push(first ? [first.a.name, 'alert.all', [first.a.name, clock(first.f.at)], null, null] : [null, 'alert.allUnknown', [], null, null]);
+    const first = usable.find((a) => a.name === st.first_free && a.free_at), f = first && freeAt(first); // the daemon's pick
+    specs.push(!first ? [null, 'alert.allUnknown', [], null, null]
+      : f ? [first.name, 'alert.all', [first.name, clock(f.at)], null, null] : [first.name, 'alert.allCheck', [first.name], null, null]);
   }
   if (st.unknown_active) specs.push([null, 'alert.unknown', [where()], 'alert.unknownTail', null]);
   const login = ordered().filter((a) => a.needs_login);
@@ -761,8 +754,11 @@ function fillLane(l, a, { x, from, to, now, leaves }) {
         break;
       }
       const r = seg('rest', now, f ? Math.min(+f.at, to) : to);
-      if (f && +f.at <= to) note([nextChange(a, kind), h('span', 'm', ` · ${f.x.short} ${pct(f.x.w.utilization)}`)], f.at, { before: now, short: clock(f.at) });
-      else {
+      if (f && +f.at <= to) {
+        const words = [nextChange(a, kind)];
+        if (f.x) words.push(h('span', 'm', ` · ${f.x.short} ${pct(f.x.w.utilization)}`));
+        note(words, f.at, { before: now, short: clock(f.at) });
+      } else {
         r?.classList.add('cut');
         note([nextChange(a, kind)], to, { side: 'before', before: now, short: f && clock(f.at) });
       }

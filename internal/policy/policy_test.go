@@ -257,6 +257,29 @@ func TestFreeAt(t *testing.T) {
 	if at, ok := FreeAt(acct("x", 1, h5(10)), th, now); !ok || !at.Equal(now) {
 		t.Errorf("not blocked: %v %v", at, ok)
 	}
+	exact := 3*time.Hour + 123*time.Millisecond // the page matches it to the window's own reset
+	if at, ok := FreeAt(acct("x", 1, h5r(99, exact)), th, now); !ok || !at.Equal(now.Add(exact)) {
+		t.Errorf("reset at %v, free at %v", now.Add(exact), at)
+	}
+}
+
+func TestFirstFree(t *testing.T) { // what the page names; Decide's all-exhausted cases cover the switch
+	for _, tc := range []struct {
+		name  string
+		accts []AccountState
+		want  string
+	}{
+		{"staying names the active", []AccountState{acct("a", 30, h5r(99, 3*time.Hour)), acct("cur", 20, h5r(99, time.Hour))}, "cur"},
+		{"another sooner", []AccountState{acct("a", 30, h5r(99, 30*time.Minute)), acct("cur", 20, h5r(99, time.Hour))}, "a"},
+		{"active unknown, another known", []AccountState{acct("a", 30, h5r(99, 3*time.Hour)), acct("cur", 20, h5r(99, 0))}, "a"},
+		{"nothing known", []AccountState{acct("a", 30, h5r(99, 0)), acct("cur", 20, h5r(99, 0))}, ""},
+		{"a stale one is no pick", []AccountState{acct("a", 30, h5r(99, time.Minute), checked(6*time.Minute)), acct("cur", 20, h5r(99, time.Hour))}, "cur"},
+		{"no active", []AccountState{acct("a", 30, h5r(99, 3*time.Hour)), acct("b", 20, h5r(99, time.Hour))}, "b"},
+	} {
+		if got := FirstFree(now, tc.accts, "cur", th); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+	}
 }
 
 func TestDecideCacheAware(t *testing.T) {

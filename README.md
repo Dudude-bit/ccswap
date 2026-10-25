@@ -254,7 +254,9 @@ does not know, add it with `ccswap adopt <name>` first.
 - 95% of its 5-hour window (`five_hour`),
 - 98% of its weekly window, or of a per-model weekly window such as Sonnet's (`weekly`),
 - or when a session stops on a usage limit: the hook reports it, and the account counts as at its limit
-  for an hour, unless fresh numbers show that limit under 80% (then the session ran on another account).
+  for an hour, or until the window the message names resets if that comes sooner (for a message that names
+  none, the first window at 80% or more to reset), unless fresh numbers show that limit under 80% (then the
+  session ran on another account) or reset since (then the message is from before the reset).
 
 **Where it goes.** To the first usable account in order: enabled, not waiting for a login, with numbers
 fresh enough to trust, and under its thresholds. A higher priority comes first; within a priority the
