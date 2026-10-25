@@ -1214,6 +1214,106 @@ func TestSignalDoesNotExtendLimitHit(t *testing.T) {
 	}
 }
 
+// Observed: every account at its limit, a's 5-hour window resetting first; a's session stopped on the
+// limit, the hour-long mark outlasted that reset and ccswap moved to b, which resets later.
+func TestSignalEndsAtTheNamedWindowsReset(t *testing.T) {
+	week90 := resp{200, fmt.Sprintf(`{"five_hour":{"utilization":96,"resets_at":%q},"seven_day":{"utilization":90,"resets_at":%q}}`,
+		t0.Add(30*time.Minute).Format(time.RFC3339), t0.Add(72*time.Hour).Format(time.RFC3339))}
+	for _, tc := range []struct {
+		msg  string
+		want time.Time
+	}{
+		{"You've hit your session limit · resets 6:30am (Europe/Moscow)", t0.Add(30 * time.Minute)},
+		{"You've hit your weekly limit · resets Oct 27, 1am (Europe/Moscow)", t0.Add(time.Hour)},
+		{"You've hit your limit · resets 6:30am", t0.Add(30 * time.Minute)}, // no window named: the soonest at 80% or more
+		{"Claude usage limit reached. Your limit will reset at 6:30am", t0.Add(30 * time.Minute)},
+	} {
+		e := newTenv(t)
+		e.api.set(func(f *fakeAnthropic) {
+			f.usage["atA"] = week90
+			f.usage["atB"] = usageAt(96, t0.Add(50*time.Minute))
+		})
+		e.poll()
+		e.d.Signal(context.Background(), map[string]any{"error": "rate_limit", "last_assistant_message": tc.msg})
+		e.d.mu.Lock()
+		until := e.d.usage["a"].limitHitUntil
+		e.d.mu.Unlock()
+		if !until.Equal(tc.want) {
+			t.Errorf("%s: limit hit until %v, want %v", tc.msg, until, tc.want)
+		}
+	}
+
+	e := newTenv(t)
+	e.api.set(func(f *fakeAnthropic) {
+		f.usage["atA"] = usageAt(96, t0.Add(30*time.Minute))
+		f.usage["atB"] = usageAt(96, t0.Add(50*time.Minute))
+	})
+	e.poll()
+	e.clk.Add(time.Minute)
+	e.d.Signal(context.Background(), map[string]any{"error": "rate_limit",
+		"last_assistant_message": "You've hit your session limit · resets 6:30am (Europe/Moscow)"})
+	if st, _ := e.d.Status(context.Background()); st.FirstFree == nil || *st.FirstFree != "a" {
+		t.Fatal("the page names another account than the pick:", st.FirstFree)
+	}
+	e.poll()
+	if e.entry().OAuth.RefreshToken != "rA" {
+		t.Fatal("moved to b, which resets after a")
+	}
+}
+
+// A limit signal seconds after the named window reset is from before it (a late hook, a clock ahead),
+// while the numbers checked just before the reset still show the window at its limit.
+func TestSignalJustAfterTheNamedWindowsResetIgnored(t *testing.T) {
+	e := newTenv(t)
+	e.api.set(func(f *fakeAnthropic) {
+		f.usage["atA"] = usageAt(96, t0.Add(30*time.Minute))
+		f.usage["atB"] = usageAt(96, t0.Add(50*time.Minute))
+	})
+	e.clk.Add(29 * time.Minute)
+	e.poll()
+	e.clk.Add(70 * time.Second)
+	e.d.Signal(context.Background(), map[string]any{"error": "rate_limit",
+		"last_assistant_message": "You've hit your session limit · resets 12:30pm (UTC)"})
+	e.d.mu.Lock()
+	until := e.d.usage["a"].limitHitUntil
+	e.d.mu.Unlock()
+	if !until.IsZero() {
+		t.Fatal("marked a until", until)
+	}
+	e.poll()
+	if e.entry().OAuth.RefreshToken != "rA" {
+		t.Fatal("moved to b, which resets after a")
+	}
+}
+
+func TestViewFreeAtIsThePolicys(t *testing.T) { // the page and the TUI show what the all-exhausted pick counts
+	e := newTenv(t)
+	e.poll()
+	if f := e.view("a").FreeAt; f != nil {
+		t.Fatal("a is not exhausted, yet free at", f)
+	}
+	if st, _ := e.d.Status(context.Background()); st.FirstFree != nil {
+		t.Fatal("not every account is at its limit, yet first free:", *st.FirstFree)
+	}
+
+	e = newTenv(t)
+	e.api.set(func(f *fakeAnthropic) {
+		f.usage["atA"] = resp{200, fmt.Sprintf(`{"five_hour":{"utilization":96,"resets_at":%q},"seven_day":{"utilization":90,"resets_at":%q}}`,
+			t0.Add(30*time.Minute).Format(time.RFC3339), t0.Add(72*time.Hour).Format(time.RFC3339))}
+		f.usage["atB"] = usageAt(96, t0.Add(50*time.Minute))
+	})
+	e.poll()
+	if f := e.view("a").FreeAt; f == nil || !f.Equal(t0.Add(30*time.Minute)) {
+		t.Fatal("free at the 5-hour reset, got", f)
+	}
+	e.clk.Add(time.Minute)
+	e.d.Signal(context.Background(), map[string]any{"error": "rate_limit",
+		"last_assistant_message": "You've hit your weekly limit · resets Oct 27, 1am (Europe/Moscow)"})
+	if f := e.view("a").FreeAt; f == nil || !f.Equal(t0.Add(61*time.Minute)) {
+		t.Fatal("free when the limit hit ends, after the 5-hour reset, got", f)
+	}
+}
+
 func addC(t *testing.T, e *tenv) {
 	t.Helper()
 	e.st.Update(func(s *store.State) error {

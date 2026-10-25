@@ -429,6 +429,7 @@
   "web.ago.now": "just now",
   "web.ago.s": "{0} s ago",
   "web.alert.all": "Every account is at its threshold, so Claude Code may hit a limit. **{0}** is back first, at {1}.",
+  "web.alert.allCheck": "Every account is at its threshold, so Claude Code may hit a limit. **{0}** is back first, at the next check.",
   "web.alert.allUnknown": "Every account is at its threshold, so Claude Code may hit a limit, and none has a known reset time.",
   "web.alert.copied": "Copied",
   "web.alert.copy": "Copy command",

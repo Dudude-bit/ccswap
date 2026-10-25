@@ -15,6 +15,7 @@ import (
 	"github.com/Dudude-bit/ccswap/internal/claudecode"
 	"github.com/Dudude-bit/ccswap/internal/keychain"
 	"github.com/Dudude-bit/ccswap/internal/store"
+	"github.com/Dudude-bit/ccswap/internal/switcher"
 )
 
 // shiftsText is shifts as "a 0s-30m0s" from t0, "-" for no end.
@@ -82,11 +83,12 @@ func TestShiftsFromBeforeTheHolderLog(t *testing.T) {
 	home := t.TempDir()
 	os.WriteFile(filepath.Join(home, "state.json"), fmt.Appendf(nil, `{"accounts":[{"name":"a"},{"name":"b"}],"active":"a","auto":false,"last_switch_at":%q}`,
 		t0.Add(-2*time.Hour).Format(time.RFC3339)), 0o600)
-	st, err := store.Open(home, keychain.NewFake())
+	kc := keychain.NewFake()
+	st, err := store.Open(home, kc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := New(Options{Store: st, Now: (&clock{t: t0}).Now})
+	d := New(Options{Store: st, Switcher: switcher.New(switcher.Deps{KC: kc, Store: st}), Now: (&clock{t: t0}).Now})
 	got := func() string {
 		s, _ := d.Status(context.Background())
 		return shiftsText(s.Shifts)
