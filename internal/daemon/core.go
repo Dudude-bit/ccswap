@@ -1396,7 +1396,10 @@ func (d *Daemon) Status(context.Context) (api.Status, error) {
 			s.Next = &n
 		}
 	}
-	if n := policy.FirstFree(now, states, s.Active, d.th()); n != "" {
+	usable := func(a policy.AccountState) bool {
+		return a.Enabled && !a.NeedsLogin && !policy.Exhausted(a, d.th(), now)
+	}
+	if n := policy.FirstFree(now, states, s.Active, d.th()); n != "" && !slices.ContainsFunc(states, usable) {
 		s.FirstFree = &n
 	}
 	return s, nil

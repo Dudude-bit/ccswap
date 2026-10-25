@@ -456,8 +456,9 @@ function renderAlerts() {
   const st = state.status, specs = [];
   const usable = state.accounts.filter((a) => a.enabled && !a.needs_login);
   if (usable.length && usable.every((a) => a.exhausted)) {
-    const first = usable.find((a) => a.name === st.first_free && a.free_at); // the daemon's pick
-    specs.push(first ? [first.name, 'alert.all', [first.name, clock(new Date(first.free_at))], null, null] : [null, 'alert.allUnknown', [], null, null]);
+    const first = usable.find((a) => a.name === st.first_free && a.free_at), f = first && freeAt(first); // the daemon's pick
+    specs.push(!first ? [null, 'alert.allUnknown', [], null, null]
+      : f ? [first.name, 'alert.all', [first.name, clock(f.at)], null, null] : [first.name, 'alert.allCheck', [first.name], null, null]);
   }
   if (st.unknown_active) specs.push([null, 'alert.unknown', [where()], 'alert.unknownTail', null]);
   const login = ordered().filter((a) => a.needs_login);

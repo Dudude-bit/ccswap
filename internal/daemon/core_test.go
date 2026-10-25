@@ -1292,6 +1292,9 @@ func TestViewFreeAtIsThePolicys(t *testing.T) { // the page and the TUI show wha
 	if f := e.view("a").FreeAt; f != nil {
 		t.Fatal("a is not exhausted, yet free at", f)
 	}
+	if st, _ := e.d.Status(context.Background()); st.FirstFree != nil {
+		t.Fatal("not every account is at its limit, yet first free:", *st.FirstFree)
+	}
 
 	e = newTenv(t)
 	e.api.set(func(f *fakeAnthropic) {
