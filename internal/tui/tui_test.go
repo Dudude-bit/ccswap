@@ -148,6 +148,16 @@ func run(t *testing.T, m tea.Model, cmd tea.Cmd) tea.Model {
 	return m
 }
 
+func TestPassedFreeAtShowsNoTime(t *testing.T) { // the daemon is down, or its next check has not come yet
+	f := fixture()
+	past := time.Now().Add(-time.Minute)
+	f.accts[1].FreeAt = &past
+	v := text(loadedAt(t, f, 100))
+	if !strings.Contains(v, "✕ "+i18n.T("tui.limit_reached")) || strings.Contains(v, i18n.T("tui.out_until", "")) {
+		t.Fatal("a passed free_at shown as a time:\n" + v)
+	}
+}
+
 func TestWideViewShowsEveryState(t *testing.T) {
 	f := fixture()
 	v := text(loadedAt(t, f, 100))

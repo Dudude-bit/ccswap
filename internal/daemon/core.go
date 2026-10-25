@@ -39,6 +39,7 @@ const (
 	refreshBefore = 10 * time.Minute // refresh vault tokens this close to expiry
 	limitBackoff  = time.Hour        // an account that hit its limit counts as exhausted this long
 	signalGrace   = time.Minute      // limit signals this soon after a switch belong to the previous account
+	nearLimit     = 80               // utilization from which a window may be the one a limit message is about
 	parkedFor     = 2 * time.Minute  // Claude Code caches its entry 30 s and may write it back over a switch
 	maxBackoff    = 10 * time.Minute // slowest pace a 429 teaches; a longer check interval still wins
 	calmAnswers   = 30               // answers in a row before an account slowed by a 429 is asked a bit faster
@@ -1200,7 +1201,7 @@ func (d *Daemon) Signal(ctx context.Context, p map[string]any) error {
 
 // limitHit marks the account in Claude Code's entry as at its limit, unless the signal came right
 // after a switch (it belongs to the previous account) or the usage shows the window msg names far
-// from its limit. Usage too old to tell is asked at once, unless the account is disabled or waits for
+// from its limit or reset since. Usage too old to tell is asked at once, unless the account is disabled or waits for
 // a login, Anthropic made it wait, a T3 request's ask of it is in flight, or there is no live token:
 // then the signal counts.
 func (d *Daemon) limitHit(ctx context.Context, msg string) {
@@ -1217,10 +1218,11 @@ func (d *Daemon) limitHit(ctx context.Context, msg string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.holder != "" && now.Sub(st.LastSwitchAt) >= signalGrace { // the account in the entry
-		if u := d.acct(d.holder); !now.Before(u.limitHitUntil) && !d.farFromLimit(u, msg, now) { // retries must not extend it
+		u := d.acct(d.holder)
+		if w := named(u, msg); !now.Before(u.limitHitUntil) && !d.farFromLimit(u, w, now) { // retries must not extend it
 			u.limitHitUntil = now.Add(limitBackoff)
-			if w := named(u, msg); w != nil && w.ResetsAt.After(now) && w.ResetsAt.Before(u.limitHitUntil) {
-				u.limitHitUntil = w.ResetsAt // longer, it would hide the reset from the all-exhausted pick
+			if r := limitEnd(u, w, msg, now); r.After(now) && r.Before(u.limitHitUntil) {
+				u.limitHitUntil = r // longer, it would hide the reset from the all-exhausted pick
 			}
 		}
 	}
@@ -1253,13 +1255,39 @@ func (d *Daemon) signalAge() time.Duration {
 
 var limitName = regexp.MustCompile(`^You've hit your (\w+) limit`)
 
-// farFromLimit reports whether fresh usage shows the window msg names well below its limit: then the
-// failing session ran on another account. The hook can't tell itself: Claude Code is observed to run
-// hooks without CLAUDE_CODE_OAUTH_TOKEN (a session on its own token, e.g. an agent runner's).
+// farFromLimit reports whether fresh usage shows w, the window the limit message names, well below its
+// limit: then the failing session ran on another account. The hook can't tell itself: Claude Code is
+// observed to run hooks without CLAUDE_CODE_OAUTH_TOKEN (a session on its own token, e.g. an agent
+// runner's). So does a reset of w since the check: the message is from before it (a late hook, a clock
+// ahead), as no window runs out within signalAge of its start.
 // Unknown wording, or usage older than signalAge: false, and the signal counts.
-func (d *Daemon) farFromLimit(u *acctUsage, msg string, now time.Time) bool {
-	w := named(u, msg)
-	return w != nil && now.Sub(u.checkedAt) <= d.signalAge() && w.Utilization < 80
+func (d *Daemon) farFromLimit(u *acctUsage, w *anthropic.Window, now time.Time) bool {
+	if w == nil || now.Sub(u.checkedAt) > d.signalAge() {
+		return false
+	}
+	return w.Utilization < nearLimit || w.ResetsAt.After(u.checkedAt) && !w.ResetsAt.After(now)
+}
+
+// limitEnd is when the limit msg reports ends by u's numbers: the reset of w, the window msg names, or
+// with wording that names none, the soonest coming reset of a window at nearLimit or more; zero when unknown.
+func limitEnd(u *acctUsage, w *anthropic.Window, msg string, now time.Time) time.Time {
+	if limitName.MatchString(msg) {
+		if w == nil {
+			return time.Time{}
+		}
+		return w.ResetsAt
+	}
+	ws := []*anthropic.Window{u.fiveHour, u.sevenDay}
+	for i := range u.models {
+		ws = append(ws, &u.models[i].Window)
+	}
+	var end time.Time
+	for _, x := range ws {
+		if x != nil && x.Utilization >= nearLimit && x.ResetsAt.After(now) && (end.IsZero() || x.ResetsAt.Before(end)) {
+			end = x.ResetsAt
+		}
+	}
+	return end
 }
 
 // named is u's window that msg says is at its limit; nil for unknown wording or a window u has no numbers for.
@@ -1362,10 +1390,14 @@ func (d *Daemon) Status(context.Context) (api.Status, error) {
 	if unknown {
 		s.Active = ""
 	}
+	states, now := d.states(st), d.o.Now()
 	if st.Auto && s.Active != "" {
-		if n := policy.Next(d.o.Now(), d.states(st), s.Active, d.th(), strategyOf(st)); n != "" {
+		if n := policy.Next(now, states, s.Active, d.th(), strategyOf(st)); n != "" {
 			s.Next = &n
 		}
+	}
+	if n := policy.FirstFree(now, states, s.Active, d.th()); n != "" {
+		s.FirstFree = &n
 	}
 	return s, nil
 }

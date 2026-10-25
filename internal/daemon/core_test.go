@@ -1225,7 +1225,8 @@ func TestSignalEndsAtTheNamedWindowsReset(t *testing.T) {
 	}{
 		{"You've hit your session limit · resets 6:30am (Europe/Moscow)", t0.Add(30 * time.Minute)},
 		{"You've hit your weekly limit · resets Oct 27, 1am (Europe/Moscow)", t0.Add(time.Hour)},
-		{"You've hit your limit · resets 6:30am", t0.Add(time.Hour)},
+		{"You've hit your limit · resets 6:30am", t0.Add(30 * time.Minute)}, // no window named: the soonest at 80% or more
+		{"Claude usage limit reached. Your limit will reset at 6:30am", t0.Add(30 * time.Minute)},
 	} {
 		e := newTenv(t)
 		e.api.set(func(f *fakeAnthropic) {
@@ -1251,6 +1252,34 @@ func TestSignalEndsAtTheNamedWindowsReset(t *testing.T) {
 	e.clk.Add(time.Minute)
 	e.d.Signal(context.Background(), map[string]any{"error": "rate_limit",
 		"last_assistant_message": "You've hit your session limit · resets 6:30am (Europe/Moscow)"})
+	if st, _ := e.d.Status(context.Background()); st.FirstFree == nil || *st.FirstFree != "a" {
+		t.Fatal("the page names another account than the pick:", st.FirstFree)
+	}
+	e.poll()
+	if e.entry().OAuth.RefreshToken != "rA" {
+		t.Fatal("moved to b, which resets after a")
+	}
+}
+
+// A limit signal seconds after the named window reset is from before it (a late hook, a clock ahead),
+// while the numbers checked just before the reset still show the window at its limit.
+func TestSignalJustAfterTheNamedWindowsResetIgnored(t *testing.T) {
+	e := newTenv(t)
+	e.api.set(func(f *fakeAnthropic) {
+		f.usage["atA"] = usageAt(96, t0.Add(30*time.Minute))
+		f.usage["atB"] = usageAt(96, t0.Add(50*time.Minute))
+	})
+	e.clk.Add(29 * time.Minute)
+	e.poll()
+	e.clk.Add(70 * time.Second)
+	e.d.Signal(context.Background(), map[string]any{"error": "rate_limit",
+		"last_assistant_message": "You've hit your session limit · resets 12:30pm (UTC)"})
+	e.d.mu.Lock()
+	until := e.d.usage["a"].limitHitUntil
+	e.d.mu.Unlock()
+	if !until.IsZero() {
+		t.Fatal("marked a until", until)
+	}
 	e.poll()
 	if e.entry().OAuth.RefreshToken != "rA" {
 		t.Fatal("moved to b, which resets after a")

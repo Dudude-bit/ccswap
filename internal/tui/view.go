@@ -355,7 +355,7 @@ func (m *Model) state(a api.Account, now time.Time, dim bool) []seg {
 	case !a.Enabled:
 		return []seg{{i18n.T("tui.disabled"), p.dim}}
 	case a.Exhausted:
-		if a.FreeAt != nil {
+		if a.FreeAt != nil && a.FreeAt.After(now) { // passed: the next check frees it
 			return []seg{{"✕ " + i18n.T("tui.out_until", clock(*a.FreeAt, now)), st(p.crit)}}
 		}
 		return []seg{{"✕ " + i18n.T("tui.limit_reached"), st(p.crit)}}

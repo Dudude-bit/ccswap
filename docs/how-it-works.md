@@ -211,11 +211,14 @@ limit and a reset), with three guards:
   asks for fresh numbers first, unless the account is disabled or waits for a login, Anthropic made it
   wait, a T3 request's ask of it is in flight, or there is no live token.
 - When fresh numbers show the named window under 80%, the signal is ignored: the session ran on another
-  login, such as a session with its own token, whose environment the hook may not see.
+  login, such as a session with its own token, whose environment the hook may not see. So it is when the
+  window reset after those numbers were taken: the message is from before the reset (a late hook, a clock
+  ahead), as no window runs out within minutes of its start.
 
-When the message names its window and that window's reset is known and less than an hour away, the mark
-ends at the reset instead: an hour would outlast it, and with every account at its limit ccswap would move
-to one that resets later. A repeated signal does not extend the mark.
+When the limit's window resets less than an hour away, the mark ends at the reset instead: an hour would
+outlast it, and with every account at its limit ccswap would move to one that resets later. That window is
+the one the message names, or for wording that names none (`You've hit your limit · resets 6:30am`) the
+first window at 80% or more to reset. A repeated signal does not extend the mark.
 
 ## The daemon and its API
 

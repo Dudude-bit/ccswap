@@ -247,7 +247,7 @@ function freeAt(a) {
 }
 
 // waiting is whether a resting account's time to be back has passed already: the next check frees it.
-const waiting = (a) => Boolean(a.free_at) && new Date(a.free_at) <= Date.now();
+const waiting = (a) => Boolean(a.free_at) && !freeAt(a);
 
 // closest is the window nearest its threshold: the one auto-switch leaves a for, as things stand.
 const closest = (a) => windows(a).filter((x) => x.w).sort((p, q) => (p.limit - p.w.utilization) - (q.limit - q.w.utilization))[0];
@@ -456,8 +456,8 @@ function renderAlerts() {
   const st = state.status, specs = [];
   const usable = state.accounts.filter((a) => a.enabled && !a.needs_login);
   if (usable.length && usable.every((a) => a.exhausted)) {
-    const first = usable.map((a) => ({ a, f: freeAt(a) })).filter((x) => x.f).sort((p, q) => p.f.at - q.f.at)[0];
-    specs.push(first ? [first.a.name, 'alert.all', [first.a.name, clock(first.f.at)], null, null] : [null, 'alert.allUnknown', [], null, null]);
+    const first = usable.find((a) => a.name === st.first_free && a.free_at); // the daemon's pick
+    specs.push(first ? [first.name, 'alert.all', [first.name, clock(new Date(first.free_at))], null, null] : [null, 'alert.allUnknown', [], null, null]);
   }
   if (st.unknown_active) specs.push([null, 'alert.unknown', [where()], 'alert.unknownTail', null]);
   const login = ordered().filter((a) => a.needs_login);

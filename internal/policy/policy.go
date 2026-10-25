@@ -241,7 +241,11 @@ func Decide(now time.Time, accts []AccountState, active string, lastSwitch time.
 		if n := Next(now, accts, active, th, s); n != "" {
 			return Decision{n, ReasonExhausted}
 		}
-		return allExhausted(now, accts, cur, loginOK, th)
+		n := FirstFree(now, accts, active, th)
+		if n == active {
+			n = "" // staying
+		}
+		return Decision{n, ReasonAllExhausted}
 	}
 
 	if now.Sub(lastSwitch) < th.MinDwell {
@@ -270,23 +274,30 @@ func Next(now time.Time, accts []AccountState, active string, th config.Threshol
 	return b.Name
 }
 
-func allExhausted(now time.Time, accts []AccountState, cur AccountState, loginOK bool, th config.Thresholds) Decision {
-	var own time.Time // zero: never, as with an unknown reset
-	if loginOK {
-		own, _ = FreeAt(cur, th, now)
-	}
+// FirstFree is the account that frees up first, the one auto-switch moves to or stays on when every account
+// is at its limit: active unless another, fresh and logged in, frees up sooner (the higher priority on a tie);
+// "" when no time is known.
+func FirstFree(now time.Time, accts []AccountState, active string, th config.Thresholds) string {
+	var own, pickAt time.Time // zero: never, as with an unknown reset
 	var pick AccountState
-	var pickAt time.Time
 	for _, a := range accts {
-		if a.Name == cur.Name || !a.Enabled || a.NeedsLogin || !Fresh(a, now) {
+		if !a.Enabled || a.NeedsLogin {
 			continue
 		}
-		if at, ok := FreeAt(a, th, now); ok && (pickAt.IsZero() || at.Before(pickAt) || at.Equal(pickAt) && a.Priority > pick.Priority) {
+		at, ok := FreeAt(a, th, now)
+		switch {
+		case !ok:
+		case a.Name == active:
+			own = at
+		case Fresh(a, now) && (pickAt.IsZero() || at.Before(pickAt) || at.Equal(pickAt) && a.Priority > pick.Priority):
 			pick, pickAt = a, at
 		}
 	}
-	if sooner(pickAt, own) {
-		return Decision{pick.Name, ReasonAllExhausted}
+	switch {
+	case sooner(pickAt, own):
+		return pick.Name
+	case !own.IsZero():
+		return active
 	}
-	return Decision{"", ReasonAllExhausted}
+	return ""
 }

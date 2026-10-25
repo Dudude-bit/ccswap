@@ -325,6 +325,7 @@ components:
         strategy: {$ref: "#/components/schemas/Strategy"}
         last_activity_at: {type: string, format: date-time, description: Newest Claude Code transcript write; absent when unknown}
         next: {type: string, description: Account auto-switch moves to once the active one runs out; absent when auto is off or none is usable}
+        first_free: {type: string, description: "The account that frees up first, the one auto-switch moves to or stays on when every account is at its limit (its free_at says when); absent when no time is known"}
         remote: {$ref: "#/components/schemas/Remote"}
         unknown_active: {type: boolean}
         target_service: {type: string}
