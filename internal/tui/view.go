@@ -228,23 +228,17 @@ func (m *Model) windows(a api.Account) []window {
 	return out
 }
 
-// soonest is the window whose reset comes first after now; with spent, a window over its limit first.
-func soonest(ws []window, now time.Time, spent bool) *window {
+// soonest is the window whose reset comes first after now.
+func soonest(ws []window, now time.Time) *window {
 	var best *window
 	for i := range ws {
 		w := &ws[i]
 		if w.w == nil || w.w.ResetsAt == nil || !w.w.ResetsAt.After(now) {
 			continue
 		}
-		if spent && w.w.Utilization < w.limit {
-			continue
-		}
 		if best == nil || w.w.ResetsAt.Before(*best.w.ResetsAt) {
 			best = w
 		}
-	}
-	if best == nil && spent {
-		return soonest(ws, now, false)
 	}
 	return best
 }
@@ -355,21 +349,20 @@ func (m *Model) state(a api.Account, now time.Time, dim bool) []seg {
 		}
 		return s
 	}
-	ws := m.windows(a)
 	switch {
 	case a.NeedsLogin:
 		return []seg{{"✕ " + i18n.T("tui.needs_login"), st(p.crit)}}
 	case !a.Enabled:
 		return []seg{{i18n.T("tui.disabled"), p.dim}}
 	case a.Exhausted:
-		if w := soonest(ws, now, true); w != nil {
-			return []seg{{"✕ " + i18n.T("tui.out_until", clock(*w.w.ResetsAt, now)), st(p.crit)}}
+		if a.FreeAt != nil && a.FreeAt.After(now) { // passed: the next check frees it
+			return []seg{{"✕ " + i18n.T("tui.out_until", clock(*a.FreeAt, now)), st(p.crit)}}
 		}
 		return []seg{{"✕ " + i18n.T("tui.limit_reached"), st(p.crit)}}
 	case a.Error != nil:
 		return []seg{{"! " + i18n.T("tui.check_failed"), st(p.warn)}}
 	}
-	if w := soonest(ws, now, false); w != nil {
+	if w := soonest(m.windows(a), now); w != nil {
 		return []seg{{pad(w.key, 4) + " ", p.dim}, {until(*w.w.ResetsAt, now), st(p.plain)}}
 	}
 	return []seg{{i18n.T("tui.no_reset"), p.dim}}

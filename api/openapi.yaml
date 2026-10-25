@@ -325,6 +325,7 @@ components:
         strategy: {$ref: "#/components/schemas/Strategy"}
         last_activity_at: {type: string, format: date-time, description: Newest Claude Code transcript write; absent when unknown}
         next: {type: string, description: Account auto-switch moves to once the active one runs out; absent when auto is off or none is usable}
+        first_free: {type: string, description: "When every account is at its limit: the one that frees up first, which auto-switch moves to or stays on (its free_at says when); absent otherwise or when no time is known"}
         remote: {$ref: "#/components/schemas/Remote"}
         unknown_active: {type: boolean}
         target_service: {type: string}
@@ -376,6 +377,7 @@ components:
         active: {type: boolean}
         exhausted: {type: boolean}
         exhausted_reason: {type: string}
+        free_at: {type: string, format: date-time, description: "Exhausted accounts only: when auto-switch counts the account free again, the latest reset of the windows at their thresholds or the end of a limit hit, whichever is later; absent when a blocking window's reset is unknown"}
         checked_at: {type: string, format: date-time}
         error: {type: string}
         leaves_at: {type: string, format: date-time, description: "Account in use only: when it reaches the five-hour, weekly or a per-model weekly threshold at its pace in use over the last hour, whichever comes first; absent when the pace is unknown or flat, or the window resets first"}
