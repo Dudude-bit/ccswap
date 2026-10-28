@@ -43,6 +43,8 @@ type Core interface {
 	// closes it when the daemon stops.
 	Subscribe() (changed <-chan struct{}, cancel func())
 	Refresh(ctx context.Context) error
+	// RefreshLogin refreshes one account's login in the vault now.
+	RefreshLogin(ctx context.Context, name string) (api.Account, error)
 	Signal(ctx context.Context, payload map[string]any) error
 	// WebCode mints a one-time code that the TCP listener trades for its admin key; UseWebCode takes
 	// it, once.
@@ -120,6 +122,11 @@ func (s strict) SetThresholds(ctx context.Context, r api.SetThresholdsRequestObj
 
 func (s strict) Refresh(ctx context.Context, _ api.RefreshRequestObject) (api.RefreshResponseObject, error) {
 	return api.Refresh204Response{}, s.c.Refresh(ctx)
+}
+
+func (s strict) RefreshLogin(ctx context.Context, r api.RefreshLoginRequestObject) (api.RefreshLoginResponseObject, error) {
+	a, err := s.c.RefreshLogin(ctx, r.Name)
+	return api.RefreshLogin200JSONResponse(a), err
 }
 
 func (s strict) Signal(ctx context.Context, r api.SignalRequestObject) (api.SignalResponseObject, error) {
@@ -226,6 +233,8 @@ func classify(err error) (int, api.Error) {
 		return 409, api.Error{Code: "remove_active", Message: err.Error()}
 	case errors.Is(err, ErrActiveAccount):
 		return 409, api.Error{Code: "active_account", Message: err.Error()}
+	case errors.Is(err, ErrClaudeOwns):
+		return 409, api.Error{Code: "claude_owns", Message: err.Error()}
 	case errors.Is(err, switcher.ErrNearRefresh):
 		return 409, api.Error{Code: "near_refresh", Message: err.Error()}
 	case errors.Is(err, switcher.ErrTargetRefreshing):
@@ -255,6 +264,8 @@ func classify(err error) (int, api.Error) {
 		return 409, api.Error{Code: "bundle_spent", Message: err.Error()}
 	case errors.Is(err, ErrBundleUnchecked):
 		return 502, api.Error{Code: "bundle_unchecked", Message: err.Error()}
+	case errors.Is(err, ErrRefreshFailed):
+		return 502, api.Error{Code: "refresh_failed", Message: err.Error()}
 	case errors.Is(err, ErrBadCode):
 		return 403, api.Error{Code: "bad_code", Message: err.Error()}
 	}
@@ -291,6 +302,7 @@ var tcpRoutes = map[string]access{
 	"GET /v1/events":                   readKey,
 	"PATCH /v1/accounts/:name":         adminKey,
 	"POST /v1/accounts/:name/activate": adminKey,
+	"POST /v1/accounts/:name/refresh":  adminKey,
 	"PUT /v1/auto":                     adminKey,
 	"PUT /v1/strategy":                 adminKey,
 	"PUT /v1/thresholds":               adminKey,

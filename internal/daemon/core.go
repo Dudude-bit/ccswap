@@ -44,6 +44,7 @@ const (
 	maxBackoff    = 10 * time.Minute // slowest pace a 429 teaches; a longer check interval still wins
 	calmAnswers   = 30               // answers in a row before an account slowed by a 429 is asked a bit faster
 	refreshFloor  = time.Minute      // a refresh asks no account more often than this
+	loginNotice   = 72 * time.Hour   // a login this close to its end is announced once and flagged on the page and in the TUI
 	usageWorkers  = 4
 	title         = "ccswap"
 )
@@ -62,6 +63,14 @@ var (
 	errNoToken = errors.New("no live access token for this account")
 	errSave    = errors.New("save rotated tokens")
 	errRaced   = errors.New("state changed meanwhile")
+	errOwned   = errors.New("the login is the chain in Claude Code's entry")
+)
+
+var (
+	// ErrClaudeOwns: the login is the one Claude Code uses, which only Claude Code refreshes.
+	ErrClaudeOwns error = i18n.Err("daemon.claude_owns")
+	// ErrRefreshFailed: Anthropic did not refresh the login, for a reason other than a spent one.
+	ErrRefreshFailed error = i18n.Err("daemon.refresh_failed")
 )
 
 type Options struct {
@@ -98,6 +107,9 @@ type acctUsage struct {
 	remote             bool             // the last data came from the other ccswap, which also answers T3 for it
 	five, week         trend            // recent utilization of fiveHour and sevenDay, for leavesAt
 	byModel            map[string]trend // and of each model window, by name
+	token, login       time.Time        // when the login's access and refresh tokens run out, as last read; zero = unknown
+	refreshed          time.Time        // the last refresh ccswap made of the login
+	announced          time.Time        // the login end last announced as near
 }
 
 // pendingPair is a rotated pair not yet in the vault and the consumed refresh token it replaces.
@@ -631,22 +643,65 @@ func (d *Daemon) putCreds(name string, c claudecode.Credentials) error {
 }
 
 func (d *Daemon) refreshVault(ctx context.Context, holder string) {
+	if e, err := d.entry(); err == nil && e != nil && holder != "" {
+		d.noteLogin(holder, *e)
+	}
 	for _, a := range d.o.Store.State().Accounts {
 		d.refreshOne(ctx, a.Name, holder, false)
+	}
+	d.announceEndingLogins(holder)
+}
+
+// noteLogin keeps when c's tokens run out, for name's view.
+func (d *Daemon) noteLogin(name string, c claudecode.Credentials) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	u := d.acct(name)
+	u.token, u.login = time.Time{}, time.Time{}
+	if c.OAuth.AccessToken != "" {
+		u.token = c.Expiry()
+	}
+	if c.OAuth.RefreshTokenExpiresAt > 0 {
+		u.login = time.UnixMilli(c.OAuth.RefreshTokenExpiresAt)
+	}
+}
+
+// announceEndingLogins says once per login, loginNotice ahead, that it ends: no refresh moves its end, only
+// a new login does, `claude /login` for the account in Claude Code.
+func (d *Daemon) announceEndingLogins(holder string) {
+	st, now := d.o.Store.State(), d.o.Now()
+	var notices []*i18n.Error
+	d.mu.Lock()
+	for _, a := range st.Accounts {
+		u := d.usage[a.Name]
+		if a.NeedsLogin || u == nil || !now.Before(u.login) || u.login.Sub(now) > loginNotice || u.announced.Equal(u.login) {
+			continue
+		}
+		u.announced = u.login
+		m := i18n.Err("daemon.login_ends", a.Name, clockText(u.login, now))
+		if a.Name == holder {
+			m = i18n.Err("daemon.login_ends_in_claude", a.Name, clockText(u.login, now))
+		}
+		notices = append(notices, m)
+	}
+	d.mu.Unlock()
+	for _, m := range notices {
+		d.notify(m)
 	}
 }
 
 // refreshOne refreshes name's vault token when it is about to expire, or at once with force or while
 // an imported login's bundle refresh token is unspent. Rules: never the active account nor the
-// identified holder of Claude Code's entry, never a vault copy of the chain in the entry, never an
-// account a migrate export holds, read → refresh → save under the switcher's lock, and the rotated pair
-// is saved before its access token is used.
-func (d *Daemon) refreshOne(ctx context.Context, name, holder string, force bool) {
-	invalid, flipped := false, false
+// identified holder of Claude Code's entry, never a vault copy of the chain in the entry (errOwned), never
+// an account a migrate export holds, read → refresh → save under the switcher's lock, and the rotated pair
+// is saved before its access token is used. A spent login comes back as switcher.ErrNeedsLogin.
+func (d *Daemon) refreshOne(ctx context.Context, name, holder string, force bool) error {
+	invalid, flipped, rotated := false, false, false
 	// unspent and NeedsLogin are set under the switcher lock: an import of name in between brings a new login
 	spent := func() {
 		d.mu.Lock()
 		delete(d.unspent, name)
+		d.acct(name).refreshed = d.o.Now()
 		d.mu.Unlock()
 	}
 	err := d.o.Switcher.Locked(func() error {
@@ -668,6 +723,7 @@ func (d *Daemon) refreshOne(ctx context.Context, name, holder string, force bool
 		if err != nil {
 			return fmt.Errorf("read vault: %w", err)
 		}
+		d.noteLogin(name, v)
 		d.mu.Lock()
 		force = force || d.unspent[name]
 		d.mu.Unlock()
@@ -679,7 +735,7 @@ func (d *Daemon) refreshOne(ctx context.Context, name, holder string, force bool
 			return fmt.Errorf("read claude code entry: %w", err)
 		}
 		if e != nil && e.OAuth.RefreshToken == v.OAuth.RefreshToken {
-			return nil // Claude Code owns this chain
+			return errOwned
 		}
 		old := v.OAuth.RefreshToken
 		v, ok, err = d.rotate(ctx, v)
@@ -693,6 +749,8 @@ func (d *Daemon) refreshOne(ctx context.Context, name, holder string, force bool
 		// ErrNoAccessToken with a rotated refresh token: save it all the same, the old one is spent.
 		rerr := err
 		spent()
+		d.noteLogin(name, v)
+		rotated = rerr == nil
 		if err := d.putCreds(name, v); err != nil {
 			d.mu.Lock()
 			d.pending[name] = pendingPair{v, old}
@@ -707,6 +765,9 @@ func (d *Daemon) refreshOne(ctx context.Context, name, holder string, force bool
 		if flipped {
 			d.notify(loginAgain(name))
 		}
+		return i18n.Err("daemon.login_gone", switcher.ErrNeedsLogin, name)
+	case errors.Is(err, errOwned):
+		d.logDone(topic)
 	case errors.Is(err, errSave):
 		d.logOnce(topic, slog.LevelError, "refresh: unsaved rotated tokens kept in memory, retrying next tick", "account", name, "err", err)
 		d.setErr(name, i18n.T("daemon.refresh_not_saved"))
@@ -715,6 +776,20 @@ func (d *Daemon) refreshOne(ctx context.Context, name, holder string, force bool
 		d.setErr(name, i18n.T("daemon.refresh_failed"))
 	default:
 		d.logDone(topic)
+		if rotated {
+			d.clearRefreshErr(name)
+		}
+	}
+	return err
+}
+
+// clearRefreshErr drops name's error when a refresh set it: the login works again, and the next ask for
+// its usage, maybe half an hour off, would only then say so.
+func (d *Daemon) clearRefreshErr(name string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if u := d.acct(name); u.err == i18n.T("daemon.refresh_failed") || u.err == i18n.T("daemon.refresh_not_saved") {
+		u.err = ""
 	}
 }
 
@@ -1356,6 +1431,9 @@ func (d *Daemon) view(st store.State, a store.Account) api.Account {
 	if u.err != "" {
 		v.Error = &u.err
 	}
+	if !a.NeedsLogin {
+		v.TokenExpiresAt, v.LoginExpiresAt = timePtr(u.token), timePtr(u.login)
+	}
 	for _, m := range u.models {
 		v.Models = append(v.Models, api.ModelWindow{Name: m.Name, Utilization: m.Utilization, ResetsAt: timePtr(m.ResetsAt)})
 	}
@@ -1598,6 +1676,38 @@ func (d *Daemon) SetThresholds(_ context.Context, t api.Thresholds) (api.Thresho
 		"check_active", th.CheckActive, "check_others", th.CheckOthers)
 	d.requestTick()
 	return thresholdsOf(th), nil
+}
+
+// RefreshLogin refreshes name's login in the vault now, unless ccswap refreshed it under refreshFloor ago,
+// and returns the account as it is then.
+func (d *Daemon) RefreshLogin(ctx context.Context, name string) (api.Account, error) {
+	defer d.bus.publish()
+	st, holder := d.o.Store.State(), d.holderNow()
+	a, ok := st.Find(name)
+	switch {
+	case !ok:
+		return api.Account{}, ErrNotFound
+	case a.NeedsLogin:
+		return api.Account{}, i18n.Err("daemon.login_gone", switcher.ErrNeedsLogin, name)
+	case st.Active == name || name == holder:
+		return api.Account{}, ErrClaudeOwns
+	case d.o.Switcher.Frozen(name):
+		return api.Account{}, i18n.Err("daemon.migrating", switcher.ErrFrozen, name)
+	}
+	d.mu.Lock()
+	recent := d.o.Now().Sub(d.acct(name).refreshed) < refreshFloor
+	d.mu.Unlock()
+	if !recent {
+		switch err := d.refreshOne(d.tickCtx(ctx), name, holder, true); {
+		case errors.Is(err, errOwned):
+			return api.Account{}, ErrClaudeOwns
+		case errors.Is(err, switcher.ErrNeedsLogin), errors.Is(err, errSave):
+			return api.Account{}, err
+		case err != nil:
+			return api.Account{}, ErrRefreshFailed
+		}
+	}
+	return d.viewOf(name)
 }
 
 // Refresh runs a tick now (after the running one, if any) that asks the usage of every enabled

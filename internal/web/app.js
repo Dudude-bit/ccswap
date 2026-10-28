@@ -6,6 +6,7 @@ const TIMEOUT_MS = 60000;
 const KEY_ITEM = 'ccswap-key'; // the read key, typed in: the page only looks with it
 const ADMIN_ITEM = 'ccswap-admin-key'; // the admin key a ccswap web code was traded for: this tab only
 const HOUR = 3600000;
+const SOON = 72 * HOUR; // a login this close to its end is flagged, as the daemon announces it then
 const TAGS = 8; // account colours, .c0 to .c7 in app.css
 
 const $ = (id) => document.getElementById(id);
@@ -88,11 +89,12 @@ const where = () => state.status?.host || t('host.any');
 // ERR_CODES are the error codes with a text of their own, e.<code>: the API's and the page's own offline
 // and timeout. Any other code reads e.other.
 const ERR_CODES = ['offline', 'timeout', 'unknown_active', 'internal', 'entry_expired', 'entry_changed', 'cannot_identify',
-  'invalid_thresholds', 'target_refreshing', 'not_found', 'needs_login', 'read_only', 'local_only', 'bad_code', 'migrating'];
+  'invalid_thresholds', 'target_refreshing', 'not_found', 'needs_login', 'read_only', 'local_only', 'bad_code', 'migrating',
+  'claude_owns', 'refresh_failed'];
 
 const errArgs = (e, name) => ({
   cannot_identify: [e.message], invalid_thresholds: [e.message], target_refreshing: [name], not_found: [name],
-  needs_login: [name, where()], migrating: [name],
+  needs_login: [name, where()], migrating: [name], claude_owns: [name],
 }[e.code] ?? [where()]);
 
 function describe(e, name = '<name>') {
@@ -448,10 +450,13 @@ function alertBox(name, nodes, tail, cmd) {
 
 let alertsShown = '';
 
+// loginEnd is when a's login ends, as Anthropic said at its last refresh; null when unknown or already gone.
+const loginEnd = (a) => (!a.needs_login && a.login_expires_at ? new Date(a.login_expires_at) : null);
+
 // renderAlerts raises the ink strip only when something needs the user, the gravest first: every account at
-// its threshold, a login ccswap does not know, accounts that need a new login. (The daemon being down comes
-// before them all, in the banner.) It redraws only when that changes, so the alerts are announced once and a
-// focused button keeps its focus.
+// its threshold, a login ccswap does not know, accounts that need a new login, logins about to end, which no
+// token refresh extends. (The daemon being down comes before them all, in the banner.) It redraws only when
+// that changes, so the alerts are announced once and a focused button keeps its focus.
 function renderAlerts() {
   const st = state.status, specs = [];
   const usable = state.accounts.filter((a) => a.enabled && !a.needs_login);
@@ -467,6 +472,12 @@ function renderAlerts() {
     specs.push([n, 'alert.login', [n, where()], 'alert.skips', `ccswap login ${n}`]);
   } else if (login.length > 1) {
     specs.push([null, 'alert.logins', [login.length, login.map((a) => a.name).join(', '), where()], 'alert.skipsAll', null]);
+  }
+  const ending = state.accounts.map((a) => [a, loginEnd(a)]).filter(([, end]) => end && end - Date.now() < SOON);
+  for (const [a, end] of ending.sort((p, q) => p[1] - q[1])) {
+    const key = end <= Date.now() ? (a.active ? 'alert.loginEndedClaude' : 'alert.loginEnded')
+      : a.active ? 'alert.loginEndsClaude' : 'alert.loginEnds';
+    specs.push([a.name, key, [a.name, clock(end), where()], 'alert.loginTail', a.active ? null : `ccswap login ${a.name}`]);
   }
   const shown = JSON.stringify([lang, specs.map(([n, ...rest]) => [n && tagOf(n), n, ...rest])]);
   if (shown === alertsShown) return;
@@ -840,6 +851,7 @@ function makeRow(name) {
     prio: el.querySelector('.stepper input'),
     enabled: el.querySelector('.enabled'),
     use: el.querySelector('.use'),
+    tok: el.querySelector('.tok'),
     msg: el.querySelector('.msg'),
     note: el.querySelector('.row-note'),
     pending: { prio: false, enabled: false, use: false },
@@ -857,7 +869,25 @@ function makeRow(name) {
   r.prio.addEventListener('keydown', (e) => { if (e.key === 'Enter') r.prio.blur(); });
   r.enabled.addEventListener('change', () => saveEnabled(r));
   r.use.addEventListener('click', () => switchTo(r));
+  r.tok.addEventListener('click', () => refreshToken(r));
   return r;
+}
+
+// loginCell says when a's login ends, in red once that is close, and until when its token lasts: the times
+// alone, as in the usage columns, the words in their titles. A login weeks off shows its day only.
+function loginCell(r, a) {
+  const end = loginEnd(a), tok = !a.needs_login && a.token_expires_at ? new Date(a.token_expires_at) : null;
+  const endEl = r.el.querySelector('.lg-end'), tokEl = r.el.querySelector('.lg-tok'), now = Date.now();
+  endEl.textContent = !end ? '—' : end - now >= 6 * 24 * HOUR ? dateFmt.format(end) : clock(end);
+  endEl.title = !end ? (a.needs_login ? '' : t('login.unknown')) : t(end <= now ? 'login.ended' : 'login.until', clock(end));
+  endEl.classList.toggle('soon', Boolean(end) && end - now < SOON);
+  endEl.classList.toggle('none', !end);
+  tokEl.textContent = !tok ? '' : tok <= now ? t('login.expired') : clock(tok);
+  tokEl.title = !tok ? '' : `${t(tok <= now ? 'login.tokenExpired' : 'login.tokenUntil', clock(tok))}. ${t(a.active ? 'login.claude' : 'login.auto')}`;
+  tokEl.hidden = !tok;
+  r.tok.hidden = a.active || a.needs_login;
+  r.tok.setAttribute('aria-label', r.tok.dataset.title = t('row.refreshToken', a.name));
+  if (!r.tok.classList.contains('asleep')) r.tok.title = r.tok.dataset.title;
 }
 
 // usage fills a table cell with a window's use, its threshold tick and its reset.
@@ -899,6 +929,7 @@ function renderRow(r, a) {
     : [h('span', 'use-model', '—')]));
   next.textContent = nextChange(a, kind);
   next.classList.toggle('m', kind === 'ready' || kind === 'off');
+  loginCell(r, a);
   for (const td of el.querySelectorAll('[data-col]')) td.dataset.label = t(td.dataset.col);
 
   el.querySelector('[data-step="-1"]').setAttribute('aria-label', t('row.lower', a.name));
@@ -1069,7 +1100,7 @@ function asleep(off) {
     } else if (el.classList.contains('asleep')) {
       el.classList.remove('asleep');
       el.disabled = el.classList.contains('held'); // its request still runs
-      el.title = el.dataset.tTitle ? t(el.dataset.tTitle) : '';
+      el.title = el.dataset.tTitle ? t(el.dataset.tTitle) : el.dataset.title || '';
     }
   }
   syncRuleButtons();
@@ -1267,6 +1298,22 @@ async function switchTo(r) {
     r.pending.use = false;
     setBusy(r.use, false, t('row.use'));
   }
+}
+
+// refreshToken gets r's login a new token now; the daemon refuses the login Claude Code uses, and asks
+// Anthropic at most once a minute per login.
+async function refreshToken(r) {
+  setBusy(r.tok, true);
+  hideRowMsg(r);
+  try {
+    patchLocal(r.name, await api('POST', `/v1/accounts/${encodeURIComponent(r.name)}/refresh`));
+  } catch (e) {
+    if (e.code === 'unauthorized') return showAuth(true);
+    rowMsg(r, `${t('x.token')} ${describe(e, r.name)}`);
+  } finally {
+    setBusy(r.tok, false);
+  }
+  render();
 }
 
 async function setAuto() {

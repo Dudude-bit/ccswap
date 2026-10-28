@@ -150,6 +150,14 @@ ccswap refreshes only the vault logins of accounts Claude Code is not using (pac
   the next tick or at shutdown.
 - An `invalid_grant` answer means the login is gone: the account is flagged "log in again" and you get
   a notification.
+- **On demand:** the page's button, `t` in the TUI and `POST /v1/accounts/{name}/refresh` refresh one
+  login now, under the same rules: the login Claude Code uses gets `409 claude_owns`, and a login ccswap
+  refreshed under a minute ago is not asked again (the call returns the account as it is). A failed
+  refresh is `502 refresh_failed`, a spent login `409 needs_login`.
+- **The login's end:** a refresh answer's `refresh_token_expires_in` is kept in the vault as
+  `refreshTokenExpiresAt`, and the API shows it as `login_expires_at` beside the access token's
+  `token_expires_at`. No refresh moves it; only a new login does. 72 hours ahead the daemon sends one
+  notification per login.
 
 ## Usage polling and backoff
 
@@ -246,7 +254,7 @@ web page, part of the API and the T3 Code hub:
 | The page and its files (`/management.html`, scripts, styles, fonts), with a Content Security Policy that allows nothing from other origins | nothing: they hold no data |
 | `GET /v1/i18n/<tag>`, the page's texts | nothing: they hold no secret |
 | `GET /v1/status`, `GET /v1/accounts`, `GET /v1/events` | the read key or the admin key |
-| `PATCH /v1/accounts/{name}`, `POST /v1/accounts/{name}/activate` (never forced), `PUT /v1/auto`, `PUT /v1/strategy`, `PUT /v1/thresholds`, `POST /v1/refresh` | the admin key, a listener on a loopback address, and a `Host` that names a loopback address or `localhost` |
+| `PATCH /v1/accounts/{name}`, `POST /v1/accounts/{name}/activate` (never forced), `PUT /v1/auto`, `PUT /v1/strategy`, `PUT /v1/thresholds`, `POST /v1/refresh`, `POST /v1/accounts/{name}/refresh` | the admin key, a listener on a loopback address, and a `Host` that names a loopback address or `localhost` |
 | `POST /v1/web/session`: trades a one-time code from `ccswap web` for the admin key | the code, a loopback listener and a loopback `Host` |
 | `GET /v0/management/auth-files`, `POST /v0/management/api-call`, `POST /v0/management/reset-quota`: the part of CLIProxyAPI's management API T3 Code reads | the read key or the admin key |
 

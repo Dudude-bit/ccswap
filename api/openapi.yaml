@@ -80,6 +80,22 @@ paths:
         "404": {$ref: "#/components/responses/Error"}
         "409": {$ref: "#/components/responses/Error"}
         "500": {$ref: "#/components/responses/Error"}
+  /v1/accounts/{name}/refresh:
+    parameters:
+      - {name: name, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: refreshLogin
+      description: >-
+        Refresh the account's login now, as the daemon does 10 minutes before its access token runs out: a new access
+        token, which also proves the login still works. It does not move login_expires_at. Never the login Claude Code
+        uses (claude_owns), which Claude Code refreshes itself. An account refreshed under a minute ago is not asked
+        again.
+      responses:
+        "200": {description: The account after the refresh, content: {application/json: {schema: {$ref: "#/components/schemas/Account"}}}}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
   /v1/auto:
     put:
       operationId: setAuto
@@ -291,6 +307,7 @@ components:
             404 not_found (also an unknown language of /v1/i18n), no_entry (adopt: Claude Code has no login);
             409 duplicate (also migrate import: an email here already without replace, or a name here with another email),
             remove_active, active_account (import: re-login the active account in claude),
+            claude_owns (refresh login: the login is the one Claude Code uses, and Claude Code refreshes it itself),
             near_refresh, entry_changed (Claude Code kept rewriting its login during the switch), entry_expired (Claude Code's access token expired: it has not run for a while),
             target_refreshing (the target login has no access token yet: the daemon is refreshing it),
             unknown_active, cannot_identify, needs_login,
@@ -302,7 +319,8 @@ components:
             bundle_spent (migrate import with replace: the bundle's login was used already; nothing is imported);
             500 internal;
             502 bundle_unchecked (migrate import with replace: the bundle's login was not refreshed, as Anthropic failed or
-            no time was left; nothing is imported, try again).
+            no time was left; nothing is imported, try again), refresh_failed (refresh login: Anthropic did not answer or
+            refused for another reason than a spent login; the daemon tries again on its next tick).
         message: {type: string, description: A detail; clients show their own text per code}
     Thresholds:
       type: object
@@ -380,6 +398,19 @@ components:
         free_at: {type: string, format: date-time, description: "Exhausted accounts only: when auto-switch counts the account free again, the latest reset of the windows at their thresholds or the end of a limit hit, whichever is later; absent when a blocking window's reset is unknown"}
         checked_at: {type: string, format: date-time}
         error: {type: string}
+        token_expires_at:
+          type: string
+          format: date-time
+          description: >-
+            When the login's access token runs out: for the account in Claude Code, the token Claude Code holds and
+            refreshes; for the others, ccswap's copy, which the daemon refreshes 10 minutes before. Absent while it
+            needs a login or the daemon has not read it yet.
+        login_expires_at:
+          type: string
+          format: date-time
+          description: >-
+            When the login itself ends, as Anthropic said at its last refresh: a refresh does not move it, a new login
+            does. Absent when unknown or while it needs a login.
         leaves_at: {type: string, format: date-time, description: "Account in use only: when it reaches the five-hour, weekly or a per-model weekly threshold at its pace in use over the last hour, whichever comes first; absent when the pace is unknown or flat, or the window resets first"}
         five_hour: {$ref: "#/components/schemas/Window"}
         seven_day: {$ref: "#/components/schemas/Window"}

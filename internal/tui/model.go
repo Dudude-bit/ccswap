@@ -335,6 +335,11 @@ func (m *Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.refreshing = true
 		return m, m.act("", "", false, m.c.Refresh)
+	case "t":
+		if !ok {
+			return m, nil
+		}
+		return m, m.act(a.Name, i18n.T("tui.token_refreshed", a.Name), false, func(ctx context.Context) error { return m.c.RefreshLogin(ctx, a.Name) })
 	case "l":
 		m.mode, m.hint = modeName, ""
 		m.input.Reset()

@@ -48,6 +48,9 @@ func newPalette(dark bool) palette {
 // wide is the width from which the table has a reset column and the panel the full reset text.
 const wide = 92
 
+// loginSoon is how close to its end a login is flagged: no refresh extends it, a new login must.
+const loginSoon = 72 * time.Hour
+
 // seg is a run of text in one style; a line is built from segments so a selected row can carry its
 // background through every one of them.
 type seg struct {
@@ -145,6 +148,47 @@ func clock(t, now time.Time) string {
 		return t.Format("15:04")
 	}
 	return weekday(t.Weekday()) + " " + t.Format("15:04")
+}
+
+// date is clock for a time within six days, else the date and time: a weekday alone could be another week's.
+func date(t, now time.Time) string {
+	if t.Sub(now).Abs() < 6*24*time.Hour {
+		return clock(t, now)
+	}
+	return t.Local().Format("02.01 15:04")
+}
+
+// loginEnds is when a's login ends, if that is close enough to flag.
+func loginEnds(a api.Account, now time.Time) (time.Time, bool) {
+	if a.NeedsLogin || a.LoginExpiresAt == nil || a.LoginExpiresAt.Sub(now) > loginSoon {
+		return time.Time{}, false
+	}
+	return *a.LoginExpiresAt, true
+}
+
+// tokens says when a's login ends and until when its token lasts; "" when neither is known. A narrow
+// panel leaves out who renews the token.
+func tokens(a api.Account, now time.Time, narrow bool) string {
+	var parts []string
+	switch {
+	case a.NeedsLogin:
+		return ""
+	case a.LoginExpiresAt != nil:
+		parts = append(parts, i18n.T("tui.login_until", date(*a.LoginExpiresAt, now)))
+	case a.TokenExpiresAt != nil:
+		parts = append(parts, i18n.T("tui.login_unknown"))
+	}
+	if t := a.TokenExpiresAt; t != nil {
+		tok := i18n.T("tui.token_expired")
+		if t.After(now) {
+			tok = i18n.T("tui.token_until", clock(*t, now))
+		}
+		if a.Active && !narrow {
+			tok += ", " + i18n.T("tui.token_by_claude")
+		}
+		parts = append(parts, tok)
+	}
+	return strings.Join(parts, " · ")
 }
 
 func until(t, now time.Time) string {
@@ -354,6 +398,11 @@ func (m *Model) state(a api.Account, now time.Time, dim bool) []seg {
 		return []seg{{"✕ " + i18n.T("tui.needs_login"), st(p.crit)}}
 	case !a.Enabled:
 		return []seg{{i18n.T("tui.disabled"), p.dim}}
+	}
+	if end, ok := loginEnds(a, now); ok {
+		return []seg{{"! " + i18n.T("tui.login_ends", clock(end, now)), st(p.warn)}}
+	}
+	switch {
 	case a.Exhausted:
 		if a.FreeAt != nil && a.FreeAt.After(now) { // passed: the next check frees it
 			return []seg{{"✕ " + i18n.T("tui.out_until", clock(*a.FreeAt, now)), st(p.crit)}}
@@ -369,8 +418,9 @@ func (m *Model) state(a api.Account, now time.Time, dim bool) []seg {
 }
 
 // glyph marks an account's state where a narrow table has no room for the words; the panel says them.
-func (m *Model) glyph(a api.Account) seg {
+func (m *Model) glyph(a api.Account, now time.Time) seg {
 	p := m.pal
+	_, ending := loginEnds(a, now)
 	switch {
 	case a.NeedsLogin || a.Exhausted:
 		return seg{"✕", p.crit}
@@ -378,6 +428,8 @@ func (m *Model) glyph(a api.Account) seg {
 		return seg{"!", p.warn}
 	case !a.Enabled:
 		return seg{"○", p.dim}
+	case ending:
+		return seg{"!", p.warn}
 	}
 	return seg{" ", p.plain}
 }
@@ -427,7 +479,7 @@ func (m *Model) table(w int, narrow bool, now time.Time) []string {
 			segs = append(append(segs, m.bar(wd.w, bw, fill)...), seg{" ", p.plain}, seg{pctText(wd.w), pct}, seg{"  ", p.plain})
 		}
 		if narrow {
-			segs = append(segs, m.glyph(a))
+			segs = append(segs, m.glyph(a, now))
 		} else {
 			segs = append(segs, m.state(a, now, m.down)...)
 		}
@@ -471,6 +523,11 @@ func (m *Model) detail(w int, narrow bool, a api.Account, now time.Time) []strin
 	if a.Error != nil {
 		lines = append(lines, row{segs: []seg{{"! " + *a.Error, p.warn}}})
 	}
+	if end, ok := loginEnds(a, now); ok && a.Active {
+		lines = append(lines, row{segs: []seg{{"! " + i18n.T("tui.login_ends_claude", clock(end, now)), p.warn}}})
+	} else if ok {
+		lines = append(lines, row{segs: []seg{{"! " + i18n.T("tui.login_ends_run", clock(end, now), a.Name), p.warn}}})
+	}
 	lines = append(lines, row{})
 	lw, resetW := 15, 31
 	if narrow {
@@ -510,6 +567,9 @@ func (m *Model) detail(w int, narrow bool, a api.Account, now time.Time) []strin
 		at := a.CheckedAt.Local().Format("15:04:05")
 		lines = append(lines, row{segs: []seg{{i18n.T("tui.checked_at", at, ago(*a.CheckedAt, now)), p.dim}}})
 	}
+	if t := tokens(a, now, narrow); t != "" {
+		lines = append(lines, row{segs: []seg{{t, p.dim}}})
+	}
 	title := []seg{{a.Name, p.bold}}
 	if tag != nil {
 		title = append(title, seg{"  ", p.plain}, *tag)
@@ -528,6 +588,7 @@ func (m *Model) helpBox(w int) []string {
 		{"a", i18n.T("tui.help_auto")},
 		{"s", i18n.T("tui.help_strategy")},
 		{"r", i18n.T("tui.help_check")},
+		{"t", i18n.T("tui.help_token")},
 		{"l", i18n.T("tui.help_login")},
 		{"?  esc", i18n.T("tui.close_help")},
 		{"q", i18n.T("tui.quit")},

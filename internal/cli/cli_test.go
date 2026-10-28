@@ -101,6 +101,9 @@ func (f *fake) Activate(_ context.Context, n string, force bool) (api.Status, er
 	w := "test-warning"
 	return api.Status{Active: n, Warning: &w}, f.err
 }
+func (f *fake) RefreshLogin(_ context.Context, n string) (api.Account, error) {
+	return api.Account{Name: n}, f.err
+}
 func (f *fake) SetAuto(context.Context, bool) error { return f.err }
 func (f *fake) Refresh(context.Context) error       { return f.err }
 func (f *fake) SetThresholds(_ context.Context, t api.Thresholds) (api.Thresholds, error) {

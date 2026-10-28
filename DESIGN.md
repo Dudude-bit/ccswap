@@ -366,7 +366,7 @@ The legend above the rota draws these in ink (needs login in muted ink, disabled
 - **Interaction:** one lane is a tab stop; arrow keys, Home and End move between lanes. A lane's accessible name gives its state, its next change and the shifts it held in the window. Hovering or focusing a lane highlights the same account's table row, and the reverse.
 
 ### Accounts table
-- Header in 12px muted with an edge rule; rows 48px with line dividers. Columns: account (chip, name in 600, optional email), state (swatch from the state vocabulary, word, muted detail), 5-hour and weekly usage lines (right-aligned percentage, 6px mini bar with muted tick, muted reset), per-model (hidden when no account has one), next change, priority stepper, auto switch, and the Use button (or a muted "in use"). A row's note or error strip sits beneath it, indented to the name.
+- Header in 12px muted with an edge rule; rows 48px with line dividers. Columns: account (chip, name in 600, optional email), state (swatch from the state vocabulary, word, muted detail), 5-hour and weekly usage lines (right-aligned percentage, 6px mini bar with muted tick, muted reset), per-model (hidden when no account has one), next change, login and token (the login's end over the token's in muted, times alone with the words in their titles; the login's end in critical red within three days; a 28px icon button beside them that gets a new token, hidden for the account in use and one that needs a login, its icon spinning while it asks), priority stepper, auto switch, and the Use button (or a muted "in use"). A row's note or error strip sits beneath it, indented to the name.
 
 ### Buttons
 - **Shape:** 4px radius, 32px tall (40px on coarse pointers), 0 12px padding, weight 500, a 4px invisible hit-area extension.
@@ -383,7 +383,7 @@ The legend above the rota draws these in ink (needs login in muted ink, disabled
 - **Stepper:** 28px square −/+ buttons around a borderless 44px number that shows an edge border on hover.
 
 ### Strips and alerts
-- **Alert strip:** full width, the inverted alert palette, 4px radius, min 44px. Shown only when the user must act (daemon unreachable, all exhausted, a login ccswap does not know, needs login), gravest first. Buttons inside are outlined in alert-edge; focus rings switch to alert text.
+- **Alert strip:** full width, the inverted alert palette, 4px radius, min 44px. Shown only when the user must act (daemon unreachable, all exhausted, a login ccswap does not know, needs login, a login ending within three days), gravest first. Buttons inside are outlined in alert-edge; focus rings switch to alert text.
 - **Message strip:** surface ground with a 1px border; critical (red border and text) for errors, warn (edge border, ink text) for advisories; the fault variant carries a Reload button and a report link.
 - **Note:** 13px muted line for the read-only notice and host notes.
 

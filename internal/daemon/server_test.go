@@ -67,6 +67,10 @@ func (f *fakeCore) Patch(_ context.Context, n string, p api.AccountPatch) (api.A
 	return api.Account{Name: n}, f.err
 }
 func (f *fakeCore) Remove(_ context.Context, n string) error { f.rec("remove " + n); return f.err }
+func (f *fakeCore) RefreshLogin(_ context.Context, n string) (api.Account, error) {
+	f.rec("refresh login " + n)
+	return api.Account{Name: n}, f.err
+}
 func (f *fakeCore) Activate(_ context.Context, n string, force bool) (api.Status, error) {
 	f.rec("activate " + n)
 	f.force = force
@@ -258,6 +262,9 @@ func TestErrorMapping(t *testing.T) {
 		{store.ErrDuplicate, 409, "duplicate"},
 		{ErrRemoveActive, 409, "remove_active"},
 		{ErrActiveAccount, 409, "active_account"},
+		{ErrClaudeOwns, 409, "claude_owns"},
+		{ErrRefreshFailed, 502, "refresh_failed"},
+		{i18n.Err("daemon.login_gone", switcher.ErrNeedsLogin, "b"), 409, "needs_login"},
 		{ErrLoginIncomplete, 400, "login_incomplete"},
 		{ErrInvalidName, 400, "invalid_name"},
 		{fmt.Errorf("%w: x", ErrInvalidThresholds), 400, "invalid_thresholds"},
@@ -528,6 +535,7 @@ var (
 	adminRoutes = []route{
 		{"PATCH", "/v1/accounts/a", `{"priority":3}`},
 		{"POST", "/v1/accounts/a/activate", ""},
+		{"POST", "/v1/accounts/a/refresh", ""},
 		{"PUT", "/v1/auto", `{"enabled":true}`},
 		{"PUT", "/v1/strategy", `{"strategy":"cache-aware"}`},
 		{"PUT", "/v1/thresholds", `{"five_hour":90,"seven_day":97,"hysteresis":5,"min_dwell_seconds":60}`},

@@ -22,6 +22,7 @@ type Client interface {
 	SetPriority(ctx context.Context, name string, priority int) error
 	SetEnabled(ctx context.Context, name string, on bool) error
 	SetStrategy(ctx context.Context, s api.Strategy) error
+	RefreshLogin(ctx context.Context, name string) error
 }
 
 var (
@@ -73,6 +74,10 @@ func Hint(code, name string) string {
 		return i18n.T("tui.remove_active")
 	case "active_account":
 		return i18n.T("tui.relogin_active")
+	case "claude_owns":
+		return i18n.T("tui.claude_owns")
+	case "refresh_failed":
+		return i18n.T("tui.refresh_failed")
 	case "invalid_name":
 		return NameRule()
 	case "login_incomplete":
@@ -209,4 +214,12 @@ func (a adapter) SetStrategy(ctx context.Context, s api.Strategy) error {
 		return down(err)
 	}
 	return fail(r.StatusCode(), r.Body, "", 204)
+}
+
+func (a adapter) RefreshLogin(ctx context.Context, name string) error {
+	r, err := a.c.RefreshLoginWithResponse(ctx, name)
+	if err != nil {
+		return down(err)
+	}
+	return fail(r.StatusCode(), r.Body, name, 200)
 }

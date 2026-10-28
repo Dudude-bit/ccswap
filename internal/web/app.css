@@ -565,6 +565,12 @@ body:not(.ro) .viewer { display: none !important; }
 .no-mail .c-acct .mail { display: none; }
 .c-next { white-space: nowrap; }
 .c-next.m { color: var(--mut); }
+.login-line { display: flex; align-items: center; gap: 8px; }
+.lg { display: flex; flex-direction: column; font-size: 13px; }
+.lg-tok, .lg-end.none { color: var(--mut); }
+.lg-end.soon { color: var(--crit); font-weight: 500; }
+.tok { margin-left: auto; }
+.tok.busy .ico { animation: spin .7s linear infinite; }
 
 .stepper { display: inline-flex; align-items: center; gap: 4px; }
 .step {
@@ -655,7 +661,7 @@ body:not(.ro) .viewer { display: none !important; }
 .accts.blocks, .accts.blocks tbody, .accts.blocks tr, .accts.blocks .row > * { display: block; }
 .accts.blocks .row {
   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 16px;
-  grid-template-areas: "acct acct state act" "five week next models" "prio auto . .";
+  grid-template-areas: "acct acct state act" "five week next models" "prio auto login login";
   padding: 14px 0;
   border-bottom: 1px solid var(--line);
 }
@@ -670,6 +676,8 @@ body:not(.ro) .viewer { display: none !important; }
 .accts.blocks .c-use:nth-child(3) { grid-area: five; }
 .accts.blocks .c-use:nth-child(4) { grid-area: week; }
 .accts.blocks .c-next { grid-area: next; white-space: normal; }
+.accts.blocks .c-login { grid-area: login; }
+.accts.blocks .login-line { display: inline-flex; }
 .accts.blocks .c-prio { grid-area: prio; }
 .accts.blocks .c-auto { grid-area: auto; width: auto; }
 .accts.blocks .c-act { grid-area: act; width: auto; align-self: start; }
@@ -706,7 +714,7 @@ body:not(.ro) .viewer { display: none !important; }
   .sk-duty { height: 300px; }
 
 
-  .accts.blocks .row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "acct act" "state state" "five week" "next models" "prio auto"; }
+  .accts.blocks .row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "acct act" "state state" "five week" "next models" "login login" "prio auto"; }
   .rules { grid-template-columns: minmax(0, 1fr); }
   .how dl > div { grid-template-columns: 1fr; gap: 4px; }
   .empty { flex-direction: column; align-items: flex-start; padding: 20px; }

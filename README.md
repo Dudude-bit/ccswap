@@ -120,6 +120,9 @@ ccswap adopt work
   `StopFailure` hook in Claude Code's settings tells it at once when a session stops on a usage limit.
 - ccswap never refreshes the login Claude Code is using: a refresh token works once, so refreshing it
   would log Claude Code out.
+- A login ends at a time Anthropic sets when you log in, and no token refresh moves it. Three days
+  ahead, the page raises an alert, the TUI flags the account and the daemon sends one notification: run
+  `ccswap login <name>`, or `/login` in `claude` for the account in use.
 
 [docs/how-it-works.md](docs/how-it-works.md) has the details: files, locks, identification, polling and
 the daemon's API.
@@ -325,7 +328,9 @@ account in use and, at its pace over the last hour, when it is expected to reach
 account auto-switch moves to then is marked Next, chosen by the same rule as the switch itself. From the
 page you can change priorities, which accounts auto-switch may use, auto-switch itself, the strategy,
 and the thresholds and check intervals (written to `config.toml`, whose comments are not kept, and used
-from the next check). You can also switch accounts. Updates arrive as they happen (server-sent events
+from the next check). You can also switch accounts. The Login · token column shows when each login ends
+(in red within three days) and until when its token lasts; its button gets an account a new token now,
+which also shows whether its login still works. Updates arrive as they happen (server-sent events
 from `GET /v1/events`).
 
 The page is served by the daemon's TCP listener at `http://127.0.0.1:8318/management.html` (`/`
@@ -370,6 +375,7 @@ keeps your choice on that device.
 | `a` | auto-switch on or off |
 | `s` | strategy: fill-first or cache-aware |
 | `r` | check every account's limits now |
+| `t` | get the selected account a new token now (never the one Claude Code uses) |
 | `l` | log in to a new account (asks for a name) |
 | `?` | help |
 | `q`, `ctrl+c` | quit |
