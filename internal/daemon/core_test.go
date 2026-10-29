@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2483,8 +2484,8 @@ func TestViewShowsWhenTokensRunOut(t *testing.T) {
 	e.poll()
 	for name, want := range map[string][2]time.Time{"a": {t0.Add(time.Hour), endA}, "b": {t0.Add(2 * time.Hour), endB}} {
 		v := e.view(name)
-		if v.TokenExpiresAt == nil || !v.TokenExpiresAt.Equal(want[0]) || v.LoginExpiresAt == nil || !v.LoginExpiresAt.Equal(want[1]) {
-			t.Errorf("%s: token %v, login %v", name, v.TokenExpiresAt, v.LoginExpiresAt)
+		if v.TokenExpiresAt == nil || !v.TokenExpiresAt.Equal(want[0]) || v.LoginExpiresAt == nil || !v.LoginExpiresAt.Equal(want[1]) || v.LoginEnding {
+			t.Errorf("%s: token %v, login %v, ending %v", name, v.TokenExpiresAt, v.LoginExpiresAt, v.LoginEnding)
 		}
 	}
 	e.st.Update(func(s *store.State) error { s.Accounts[1].NeedsLogin = true; return nil })
@@ -2540,6 +2541,7 @@ func TestRefreshLoginRefuses(t *testing.T) {
 		}, switcher.ErrNeedsLogin},
 		{"moving", "b", func(e *tenv) { e.d.o.Switcher.Freeze([]string{"b"}, t0.Add(time.Hour)) }, switcher.ErrFrozen},
 		{"no such account", "c", nil, ErrNotFound},
+		{"no login in the vault", "b", func(e *tenv) { e.kc.Fake.Delete(store.VaultService, "b") }, switcher.ErrNeedsLogin},
 		{"spent", "b", func(e *tenv) { e.api.set(func(f *fakeAnthropic) { delete(f.refresh, "rB") }) }, switcher.ErrNeedsLogin},
 		{"Anthropic fails", "b", func(e *tenv) { e.api.set(func(f *fakeAnthropic) { f.refresh["rB"] = resp{500, `{}`} }) }, ErrRefreshFailed},
 	} {
@@ -2564,12 +2566,15 @@ func TestRefreshLoginRefuses(t *testing.T) {
 
 func TestRefreshClearsItsOwnError(t *testing.T) { // the next ask for usage may be half an hour off
 	e := newTenv(t)
+	i18n.Set(i18n.EN)
+	t.Cleanup(func() { i18n.Set("ru") })
 	e.kc.Fake.Set(store.VaultService, "b", cred("atB", "rB", t0.Add(-time.Minute)))
 	e.api.set(func(f *fakeAnthropic) { f.refresh["rB"] = resp{500, `{}`} })
 	e.poll()
 	if v := e.view("b"); v.Error == nil || *v.Error != i18n.T("daemon.refresh_failed") {
 		t.Fatalf("a failed refresh must say so: %v", v.Error)
 	}
+	i18n.Set("ru") // the error keeps the language it was set in
 	e.api.set(func(f *fakeAnthropic) {
 		f.refresh["rB"] = resp{200, `{"access_token":"atB2","refresh_token":"rB2","expires_in":28800}`}
 	})
@@ -2586,8 +2591,73 @@ func TestEndingLoginsAnnouncedOnce(t *testing.T) {
 	e.poll()
 	ofA := note("daemon.login_ends_in_claude", "a", clockText(endA, t0))
 	e.msgs(ofA)
+	if !e.view("a").LoginEnding || e.view("b").LoginEnding {
+		t.Fatal("only a's login ends within loginNotice")
+	}
 	e.clk.Add(2 * time.Hour)
 	e.poll()
 	e.poll()
 	e.msgs(ofA, note("daemon.login_ends", "b", clockText(endB, t0.Add(2*time.Hour))))
+	if !e.view("b").LoginEnding {
+		t.Fatal("b's login ends within loginNotice now")
+	}
+}
+
+// TestRefreshDoesNotAnnounceTheLoginAgain: each refresh restates the login's end as now plus what is left,
+// a few seconds off the last one; it is still the same login.
+func TestRefreshDoesNotAnnounceTheLoginAgain(t *testing.T) {
+	e := newTenv(t)
+	end := t0.Add(48 * time.Hour)
+	e.kc.Fake.Set(store.VaultService, "b", credEnds("atB", "rB", t0.Add(5*time.Minute), end))
+	left := func(at time.Time, off time.Duration) string {
+		return fmt.Sprint(int64((end.Sub(at) + off) / time.Second))
+	}
+	e.api.set(func(f *fakeAnthropic) {
+		f.usage["atB2"], f.usage["atB3"] = usageBody(10), usageBody(10)
+		f.refresh["rB"] = resp{200, `{"access_token":"atB2","refresh_token":"rB2","expires_in":28800,"refresh_token_expires_in":` + left(t0, 3*time.Second) + `}`}
+		f.refresh["rB2"] = resp{200, `{"access_token":"atB3","refresh_token":"rB3","expires_in":28800,"refresh_token_expires_in":` + left(t0.Add(9*time.Hour), 5*time.Second) + `}`}
+	})
+	e.poll()
+	e.clk.Add(9 * time.Hour)
+	e.poll()
+	if e.vault("b").OAuth.RefreshToken != "rB3" {
+		t.Fatal(e.api.calls)
+	}
+	e.msgs(note("daemon.login_ends", "b", clockText(end.Add(3*time.Second), t0)))
+}
+
+// TestTickReadsTheEntryOnce: the times of the login in Claude Code come from the read that identifies it.
+func TestTickReadsTheEntryOnce(t *testing.T) {
+	e := newTenv(t)
+	e.poll()
+	var reads atomic.Int32
+	e.kc.mu.Lock()
+	e.kc.onGet = func(svc string) {
+		if svc == claudecode.ServiceName("") {
+			reads.Add(1)
+		}
+	}
+	e.kc.mu.Unlock()
+	e.poll() // nothing to ask: a's usage is fresh
+	if n := reads.Load(); n != 1 {
+		t.Fatalf("Claude Code's entry read %d times in a tick", n)
+	}
+}
+
+// TestUnidentifiedEntryShowsNoTimes: while the entry is not identified, the times the account in use had
+// are an older chain's.
+func TestUnidentifiedEntryShowsNoTimes(t *testing.T) {
+	e := newTenv(t)
+	e.kc.Fake.Set(claudecode.ServiceName(""), claudecode.KeychainAccount(), credEnds("atA", "rA", t0.Add(time.Hour), t0.Add(20*24*time.Hour)))
+	e.poll()
+	if v := e.view("a"); v.TokenExpiresAt == nil || v.LoginExpiresAt == nil {
+		t.Fatalf("the entry's times: %+v", v)
+	}
+	// Claude Code rotated the chain, and the profile cannot tell whose it is
+	e.kc.Fake.Set(claudecode.ServiceName(""), claudecode.KeychainAccount(), credEnds("atX", "rX", t0.Add(8*time.Hour), t0.Add(30*24*time.Hour)))
+	e.poll()
+	if v := e.view("a"); v.TokenExpiresAt != nil || v.LoginExpiresAt != nil {
+		t.Fatalf("stale times shown: token %v, login %v", v.TokenExpiresAt, v.LoginExpiresAt)
+	}
+	e.msgs()
 }

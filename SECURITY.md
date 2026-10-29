@@ -82,10 +82,13 @@ has no telemetry. With `ccswap remote set` it also asks the other ccswap you nam
   - The **read key** (the one `ccswap t3` prints) changes no setting. It reads the accounts' names,
     emails, limits and status, and lets T3 Code ask for an account's usage; it never reveals a token.
   - Either key, on any listener and `Host`, renews the login of an account that is already here: the
-    daemon runs `claude auth login`, hands out its sign-in link and takes the code back. That login is
-    kept only if it is the account's own email, and the sign-in's PKCE verifier never leaves the
-    daemon's claude, so a key holder can start such a login and cancel it, but only the account's owner
-    can finish it, and an intercepted code works nowhere else. Adding an account stays on the socket.
+    daemon runs `claude auth login`, hands out its sign-in link with an id, and takes the code back with
+    that id. That login is kept only as a new login of an account here with its own email, never as a new
+    account, and the sign-in's PKCE verifier never leaves the daemon's claude, so a key holder can start
+    such a login and cancel the one it started, but only the account's owner can finish it, and an
+    intercepted code works nowhere else. While a link waits for its code, the read key gets no other one
+    for that account (one `claude` at a time) and cannot cancel it; only the admin key replaces it.
+    Adding an account stays on the socket.
     The page's texts (`GET /v1/i18n/<tag>`) need no key: they hold nothing secret.
   - The **admin key** changes settings: priorities, enabling and disabling accounts for auto-switch,
     auto-switch itself, the strategy, thresholds, a manual switch and checking limits now. It is never

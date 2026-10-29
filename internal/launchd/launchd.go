@@ -61,12 +61,13 @@ func Plist(binPath, home string) []byte {
 	b.WriteString("\t<key>ExitTimeOut</key>\n\t<integer>30</integer>\n")
 	// no ProcessType Background: on a loaded Mac it starves the daemon for minutes (tokens expire, CLI times out)
 	// launchd gives no shell env: keep the proxy claude reaches Anthropic through (net/http reads these),
-	// the locale, which picks the language of notifications, and CCSWAP_CLAUDE_BIN, the claude a login from the page runs
+	// the locale, which picks the language of notifications, and CCSWAP_CLAUDE_BIN and PATH (launchd's is
+	// /usr/bin:/bin), where a login from the page finds claude and the node an npm-installed claude runs on
 	var env bytes.Buffer
 	if os.Getenv("CCSWAP_HOME") != "" { // Home is absolute (a relative CCSWAP_HOME is refused), as launchd runs the job from /
 		fmt.Fprintf(&env, "\t\t<key>CCSWAP_HOME</key>\n\t\t<string>%s</string>\n", esc(home))
 	}
-	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "LC_ALL", "LC_MESSAGES", "LANG", "CCSWAP_CLAUDE_BIN"} {
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "LC_ALL", "LC_MESSAGES", "LANG", "CCSWAP_CLAUDE_BIN", "PATH"} {
 		if v := os.Getenv(k); v != "" {
 			fmt.Fprintf(&env, "\t\t<key>%s</key>\n\t\t<string>%s</string>\n", k, esc(v))
 		}

@@ -153,11 +153,14 @@ ccswap refreshes only the vault logins of accounts Claude Code is not using (pac
 - **On demand:** the page's button, `t` in the TUI and `POST /v1/accounts/{name}/refresh` refresh one
   login now, under the same rules: the login Claude Code uses gets `409 claude_owns`, and a login ccswap
   refreshed under a minute ago is not asked again (the call returns the account as it is). A failed
-  refresh is `502 refresh_failed`, a spent login `409 needs_login`.
+  refresh is `502 refresh_failed`, a spent login, or one ccswap keeps no copy of, `409 needs_login`.
 - **The login's end:** a refresh answer's `refresh_token_expires_in` is kept in the vault as
   `refreshTokenExpiresAt`, and the API shows it as `login_expires_at` beside the access token's
-  `token_expires_at`. No refresh moves it; only a new login does. 72 hours ahead the daemon sends one
-  notification per login.
+  `token_expires_at`. No refresh moves it; only a new login does. 72 hours ahead the API flags it
+  (`login_ending`, which the page and the TUI show) and the daemon sends one notification per login: a
+  refresh restates the end a few seconds off, which is still the same login, while a new one moves it by
+  days. The times of the login in Claude Code come from the entry as the tick read it to identify its
+  holder; while the entry is not identified, the account in use shows none.
 
 ## Usage polling and backoff
 
@@ -256,7 +259,7 @@ web page, part of the API and the T3 Code hub:
 | `GET /v1/status`, `GET /v1/accounts`, `GET /v1/events` | the read key or the admin key |
 | `PATCH /v1/accounts/{name}`, `POST /v1/accounts/{name}/activate` (never forced), `PUT /v1/auto`, `PUT /v1/strategy`, `PUT /v1/thresholds`, `POST /v1/refresh`, `POST /v1/accounts/{name}/refresh` | the admin key, a listener on a loopback address, and a `Host` that names a loopback address or `localhost` |
 | `POST /v1/web/session`: trades a one-time code from `ccswap web` for the admin key | the code, a loopback listener and a loopback `Host` |
-| `POST /v1/accounts/{name}/login`, `POST /v1/accounts/{name}/login/code`, `DELETE /v1/accounts/{name}/login`: an account's new login from the page | the read key or the admin key, on any listener and `Host` |
+| `POST /v1/accounts/{name}/login`, `POST /v1/accounts/{name}/login/code`, `DELETE /v1/accounts/{name}/login?id=…`: an account's new login from the page | the read key or the admin key, on any listener and `Host`; replacing a link that waits for its code, the admin key |
 | `GET /v0/management/auth-files`, `POST /v0/management/api-call`, `POST /v0/management/reset-quota`: the part of CLIProxyAPI's management API T3 Code reads | the read key or the admin key |
 
 Everything else, such as adding and removing accounts, a forced switch, the hook signal, `remote`,
@@ -265,16 +268,22 @@ whose name was pointed at 127.0.0.1 (DNS rebinding) from changing anything.
 
 **A login from the page** renews an account that is already here. `POST /v1/accounts/{name}/login`
 makes a `login-*` folder, runs `claude auth login` in it as `ccswap login` does (`CCSWAP_CLAUDE_BIN`,
-else `claude` from `PATH`) and answers with the sign-in link it prints, within 30 seconds. The code the
-sign-in shows goes to `POST /v1/accounts/{name}/login/code`, which writes it to claude and imports the
-login it gets as `ccswap login` would: an account whose email differs is refused (`409
-wrong_account`). A link takes one code: a refused one (`400 code_refused`) spends it, as it spends
-claude's sign-in. A link waits 10 minutes, one per account: a new one, `DELETE` or a daemon restart stops
-its claude and drops its folder, and a code for it then gets `409 login_gone`. Claude did not start or
-gave no link: `502 login_failed`. The account Claude Code uses is refused (`409 active_account`), as
-its login is Claude Code's to renew. These routes take the read key anywhere: the PKCE verifier of the
-sign-in stays inside the daemon's claude, so a code is no use elsewhere, and the import's email check
-means a key holder can at most start a login that only the account's owner can finish.
+else `claude` from `PATH`; `ccswap daemon install` gives the service your shell's `PATH`) and answers
+with the sign-in link it prints and the link's id, within 30 seconds. The code the sign-in shows goes to
+`POST /v1/accounts/{name}/login/code` with that id, which writes it to claude and stores the login it
+gets as a new login of the account: an account whose email differs is refused (`409 wrong_account`), and
+one removed meanwhile is not added back (`404 not_found`). Signing in on the daemon's machine, in the
+browser tab claude opens, ends claude by itself: its login is stored the same way, with no code. A link
+takes one code: a refused one (`400 code_refused`) spends it, as it spends claude's sign-in. A link
+waits 10 minutes, one per account: while it does, a new one gets `409 login_pending`, except on the
+socket and with the admin key, whose new link replaces it once that one is up. `DELETE` with its id, its
+replacement or a daemon restart stops its claude and drops its folder, and a code for it then gets `409
+login_gone`, as does a code with another id. Claude did not start or gave no link: `502 login_failed`.
+The account Claude Code uses is refused (`409 active_account`), as its login is Claude Code's to renew.
+These routes take the read key anywhere: the PKCE verifier of the sign-in stays inside the daemon's
+claude, so a code is no use elsewhere, the store's check means a key holder can at most start a login
+that only the account's owner can finish, and the id keeps it from cancelling or finishing a login it
+did not start.
 
 The hub routes answer as T3 Code expects: `auth-files` lists the accounts (name, email, whether they are
 off), `api-call` accepts only `GET https://api.anthropic.com/api/oauth/usage` for one account and

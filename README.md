@@ -333,15 +333,17 @@ from the next check). You can also switch accounts. The Login · token column sh
 (in red within three days) and until when its token lasts; its button gets an account a new token now,
 which also shows whether its login still works. Once a login is close to its end or gone, the button is
 Log in instead: the daemon runs `claude auth login`, the page shows its sign-in link, and you paste back
-the code Claude shows after you sign in. Updates arrive as they happen (server-sent events from
+the code Claude shows after you sign in (on the daemon's machine, signing in in the tab claude opens is
+enough). Updates arrive as they happen (server-sent events from
 `GET /v1/events`).
 
 The page is served by the daemon's TCP listener at `http://127.0.0.1:8318/management.html` (`/`
 redirects there); `[t3] enabled = false` turns it off. Two keys guard it:
 
 - **The read key**, the one `ccswap t3` prints. Logged in with it, the page only shows, and logs an
-  account in again: that works anywhere, as the daemon keeps a login only for the account with its email,
-  so nobody can finish one without signing in as that account. "Remember the key on this device" keeps
+  account in again: that works anywhere, as the daemon keeps a login only as a new one of an account
+  here with its email, so nobody can finish one without signing in as that account. It cannot replace a
+  login another page started while that one waits for its code. "Remember the key on this device" keeps
   it after the tab closes.
 - **The admin key** changes settings. It is never printed and never put in a link: `ccswap web` asks the
   daemon for a one-time code (single use, valid for a minute) and opens `…/management.html#code=…`. The
@@ -569,8 +571,9 @@ Environment:
 
 - `CCSWAP_HOME`: ccswap's folder (see above), as an absolute path.
 - `CCSWAP_CLAUDE_BIN`: the `claude` binary `ccswap login` and a login from the page run; `claude` from
-  `PATH` by default. `ccswap daemon install` puts the `claude` your shell finds into the service, which
-  has no shell `PATH`.
+  `PATH` by default. The service has no shell `PATH`: `ccswap daemon install` copies your shell's `PATH`
+  and this variable into it, so the daemon runs the `claude` your shell runs, and finds the `node` an
+  npm-installed `claude` needs. Run it again after installing `claude` elsewhere.
 - `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` (either case) and `LC_ALL`, `LC_MESSAGES`, `LANG`:
   `ccswap daemon install` copies them from your shell into the service, so the daemon reaches Anthropic
   through the same proxy and speaks your language.

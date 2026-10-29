@@ -45,6 +45,7 @@ const (
 	calmAnswers   = 30               // answers in a row before an account slowed by a 429 is asked a bit faster
 	refreshFloor  = time.Minute      // a refresh asks no account more often than this
 	loginNotice   = 72 * time.Hour   // a login this close to its end is announced once and flagged on the page and in the TUI
+	loginJitter   = time.Hour        // a refresh restates a login's end a few seconds off; a new login moves it by days
 	usageWorkers  = 4
 	title         = "ccswap"
 )
@@ -63,8 +64,10 @@ var (
 	errNoToken = errors.New("no live access token for this account")
 	errSave    = errors.New("save rotated tokens")
 	errRaced   = errors.New("state changed meanwhile")
-	errOwned   = errors.New("the login is the chain in Claude Code's entry")
 )
+
+// skipped is why refreshOne asked Anthropic nothing: no fault of the login, so a tick does not report it.
+type skipped struct{ error }
 
 var (
 	// ErrClaudeOwns: the login is the one Claude Code uses, which only Claude Code refreshes.
@@ -95,6 +98,7 @@ type acctUsage struct {
 	models             []anthropic.ModelWindow
 	checkedAt          time.Time
 	err                string
+	refreshErr         string // err as a failed refresh set it, which the next refresh that works clears
 	limitHitUntil      time.Time
 	asked              time.Time     // the last ask for usage
 	inFlight           chan struct{} // an ask is in flight, closed when it ends: nothing else asks meanwhile
@@ -439,8 +443,9 @@ func sameState(a, b store.State) bool {
 // the known account in the entry; "" for an empty entry or a stranger's login.
 func (d *Daemon) reconcile(ctx context.Context) (holder string, ok bool) {
 	before := d.o.Store.State()
-	name, known, err := d.o.Switcher.Identify(ctx)
+	name, known, entry, err := d.o.Switcher.Identify(ctx)
 	empty := errors.Is(err, keychain.ErrNotFound)
+	d.noteEntry(before.Active, name, known, entry)
 	if err != nil && !empty { // profile or network down, unreadable entry: keep the previous state
 		d.logOnce("reconcile", slog.LevelWarn, "reconcile: cannot identify the Claude Code login", "err", err)
 		d.mu.Lock()
@@ -576,6 +581,14 @@ func (d *Daemon) setErr(name, msg string) {
 	d.mu.Unlock()
 }
 
+// setRefreshErr sets name's error to a failed refresh's.
+func (d *Daemon) setRefreshErr(name, msg string) {
+	d.mu.Lock()
+	u := d.acct(name)
+	u.err, u.refreshErr = msg, msg
+	d.mu.Unlock()
+}
+
 // holderNow is the known account in Claude Code's entry as last identified; "" = none.
 func (d *Daemon) holderNow() string {
 	d.mu.Lock()
@@ -646,9 +659,6 @@ func (d *Daemon) putCreds(name string, c claudecode.Credentials) error {
 }
 
 func (d *Daemon) refreshVault(ctx context.Context, holder string) {
-	if e, err := d.entry(); err == nil && e != nil && holder != "" {
-		d.noteLogin(holder, *e)
-	}
 	for _, a := range d.o.Store.State().Accounts {
 		d.refreshOne(ctx, a.Name, holder, false)
 	}
@@ -669,6 +679,24 @@ func (d *Daemon) noteLogin(name string, c claudecode.Credentials) {
 	}
 }
 
+// noteEntry keeps the times of the login in Claude Code's entry, as the tick read it, for name, the account
+// identified there. With no account identified there, active's times go: they would be an older chain's.
+func (d *Daemon) noteEntry(active, name string, known bool, c claudecode.Credentials) {
+	if known {
+		d.noteLogin(name, c)
+		return
+	}
+	if active != "" {
+		d.mu.Lock()
+		u := d.acct(active)
+		u.token, u.login = time.Time{}, time.Time{}
+		d.mu.Unlock()
+	}
+}
+
+// ending tells a login's end loginNotice ahead or past: no refresh moves it, only a new login does.
+func ending(login, now time.Time) bool { return !login.IsZero() && login.Sub(now) <= loginNotice }
+
 // announceEndingLogins says once per login, loginNotice ahead, that it ends: no refresh moves its end, only
 // a new login does, `claude /login` for the account in Claude Code.
 func (d *Daemon) announceEndingLogins(holder string) {
@@ -677,7 +705,7 @@ func (d *Daemon) announceEndingLogins(holder string) {
 	d.mu.Lock()
 	for _, a := range st.Accounts {
 		u := d.usage[a.Name]
-		if a.NeedsLogin || u == nil || !now.Before(u.login) || u.login.Sub(now) > loginNotice || u.announced.Equal(u.login) {
+		if a.NeedsLogin || u == nil || !now.Before(u.login) || !ending(u.login, now) || u.login.Sub(u.announced).Abs() < loginJitter {
 			continue
 		}
 		u.announced = u.login
@@ -695,9 +723,10 @@ func (d *Daemon) announceEndingLogins(holder string) {
 
 // refreshOne refreshes name's vault token when it is about to expire, or at once with force or while
 // an imported login's bundle refresh token is unspent. Rules: never the active account nor the
-// identified holder of Claude Code's entry, never a vault copy of the chain in the entry (errOwned), never
-// an account a migrate export holds, read → refresh → save under the switcher's lock, and the rotated pair
-// is saved before its access token is used. A spent login comes back as switcher.ErrNeedsLogin.
+// identified holder of Claude Code's entry, never a vault copy of the chain in the entry, never an
+// account a migrate export holds, read → refresh → save under the switcher's lock, and the rotated pair
+// is saved before its access token is used. A spent login comes back as switcher.ErrNeedsLogin, one it
+// did not ask Anthropic about as skipped.
 func (d *Daemon) refreshOne(ctx context.Context, name, holder string, force bool) error {
 	invalid, flipped, rotated := false, false, false
 	// unspent and NeedsLogin are set under the switcher lock: an import of name in between brings a new login
@@ -709,19 +738,26 @@ func (d *Daemon) refreshOne(ctx context.Context, name, holder string, force bool
 	}
 	err := d.o.Switcher.Locked(func() error {
 		if d.o.Switcher.Frozen(name) { // its bundle holds this refresh token
-			return nil
+			return skipped{i18n.Err("daemon.migrating", switcher.ErrFrozen, name)}
 		}
 		if err := d.flushLocked(name); err != nil {
 			return err
 		}
 		st := d.o.Store.State()
 		a, ok := st.Find(name)
-		if !ok || a.NeedsLogin || st.Active == name || name == holder || ctx.Err() != nil {
-			return nil
+		switch {
+		case !ok:
+			return skipped{ErrNotFound}
+		case a.NeedsLogin:
+			return skipped{i18n.Err("daemon.login_gone", switcher.ErrNeedsLogin, name)}
+		case st.Active == name || name == holder:
+			return skipped{ErrClaudeOwns}
+		case ctx.Err() != nil:
+			return skipped{ctx.Err()}
 		}
 		v, err := d.o.Store.Creds(name)
-		if errors.Is(err, keychain.ErrNotFound) {
-			return nil
+		if errors.Is(err, keychain.ErrNotFound) { // ccswap keeps no login of it
+			return skipped{i18n.Err("daemon.login_gone", switcher.ErrNeedsLogin, name)}
 		}
 		if err != nil {
 			return fmt.Errorf("read vault: %w", err)
@@ -738,7 +774,7 @@ func (d *Daemon) refreshOne(ctx context.Context, name, holder string, force bool
 			return fmt.Errorf("read claude code entry: %w", err)
 		}
 		if e != nil && e.OAuth.RefreshToken == v.OAuth.RefreshToken {
-			return errOwned
+			return skipped{ErrClaudeOwns}
 		}
 		old := v.OAuth.RefreshToken
 		v, ok, err = d.rotate(ctx, v)
@@ -763,20 +799,21 @@ func (d *Daemon) refreshOne(ctx context.Context, name, holder string, force bool
 		return rerr
 	})
 	topic := "refresh:" + name
+	var sk skipped
 	switch {
 	case invalid:
 		if flipped {
 			d.notify(loginAgain(name))
 		}
 		return i18n.Err("daemon.login_gone", switcher.ErrNeedsLogin, name)
-	case errors.Is(err, errOwned):
+	case errors.As(err, &sk):
 		d.logDone(topic)
 	case errors.Is(err, errSave):
 		d.logOnce(topic, slog.LevelError, "refresh: unsaved rotated tokens kept in memory, retrying next tick", "account", name, "err", err)
-		d.setErr(name, i18n.T("daemon.refresh_not_saved"))
+		d.setRefreshErr(name, i18n.T("daemon.refresh_not_saved"))
 	case err != nil:
 		d.logOnce(topic, slog.LevelWarn, "refresh failed, retrying next tick", "account", name, "err", err)
-		d.setErr(name, i18n.T("daemon.refresh_failed"))
+		d.setRefreshErr(name, i18n.T("daemon.refresh_failed"))
 	default:
 		d.logDone(topic)
 		if rotated {
@@ -791,7 +828,7 @@ func (d *Daemon) refreshOne(ctx context.Context, name, holder string, force bool
 func (d *Daemon) clearRefreshErr(name string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if u := d.acct(name); u.err == i18n.T("daemon.refresh_failed") || u.err == i18n.T("daemon.refresh_not_saved") {
+	if u := d.acct(name); u.err != "" && u.err == u.refreshErr {
 		u.err = ""
 	}
 }
@@ -1435,7 +1472,7 @@ func (d *Daemon) view(st store.State, a store.Account) api.Account {
 		v.Error = &u.err
 	}
 	if !a.NeedsLogin {
-		v.TokenExpiresAt, v.LoginExpiresAt = timePtr(u.token), timePtr(u.login)
+		v.TokenExpiresAt, v.LoginExpiresAt, v.LoginEnding = timePtr(u.token), timePtr(u.login), ending(u.login, now)
 	}
 	for _, m := range u.models {
 		v.Models = append(v.Models, api.ModelWindow{Name: m.Name, Utilization: m.Utilization, ResetsAt: timePtr(m.ResetsAt)})
@@ -1701,9 +1738,10 @@ func (d *Daemon) RefreshLogin(ctx context.Context, name string) (api.Account, er
 	recent := d.o.Now().Sub(d.acct(name).refreshed) < refreshFloor
 	d.mu.Unlock()
 	if !recent {
+		var sk skipped
 		switch err := d.refreshOne(d.tickCtx(ctx), name, holder, true); {
-		case errors.Is(err, errOwned):
-			return api.Account{}, ErrClaudeOwns
+		case errors.As(err, &sk): // the state changed since the checks above, or ccswap keeps no login of it
+			return api.Account{}, sk.error
 		case errors.Is(err, switcher.ErrNeedsLogin), errors.Is(err, errSave):
 			return api.Account{}, err
 		case err != nil:

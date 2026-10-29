@@ -248,24 +248,26 @@ func (s *Switcher) ident(ctx context.Context, c claudecode.Credentials) (string,
 	return "", false, nil
 }
 
-func (s *Switcher) Identify(ctx context.Context) (string, bool, error) {
+// Identify names the account whose login is in Claude Code's entry, and returns the entry as it read it.
+func (s *Switcher) Identify(ctx context.Context) (string, bool, claudecode.Credentials, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b, err := s.readEntry()
 	if err != nil {
-		return "", false, err
+		return "", false, claudecode.Credentials{}, err
 	}
 	if b == nil {
-		return "", false, keychain.ErrNotFound
+		return "", false, claudecode.Credentials{}, keychain.ErrNotFound
 	}
 	c, login, err := parseEntry(b)
 	if err != nil {
-		return "", false, err
+		return "", false, c, err
 	}
 	if !login {
-		return "", false, keychain.ErrNotFound
+		return "", false, c, keychain.ErrNotFound
 	}
-	return s.ident(ctx, c)
+	name, known, err := s.ident(ctx, c)
+	return name, known, c, err
 }
 
 // holder names the owner of the entry. A positive identification is never overridden by

@@ -104,15 +104,15 @@ func (f *fake) Activate(_ context.Context, n string, force bool) (api.Status, er
 func (f *fake) RefreshLogin(_ context.Context, n string) (api.Account, error) {
 	return api.Account{Name: n}, f.err
 }
-func (f *fake) StartLogin(context.Context, string) (api.LoginLink, error) {
+func (f *fake) StartLogin(context.Context, string, bool) (api.LoginLink, error) {
 	return api.LoginLink{}, f.err
 }
-func (f *fake) FinishLogin(_ context.Context, n, _ string) (api.Account, error) {
+func (f *fake) FinishLogin(_ context.Context, n, _, _ string) (api.Account, error) {
 	return api.Account{Name: n}, f.err
 }
-func (f *fake) CancelLogin(context.Context, string) error { return f.err }
-func (f *fake) SetAuto(context.Context, bool) error       { return f.err }
-func (f *fake) Refresh(context.Context) error             { return f.err }
+func (f *fake) CancelLogin(context.Context, string, string) error { return f.err }
+func (f *fake) SetAuto(context.Context, bool) error               { return f.err }
+func (f *fake) Refresh(context.Context) error                     { return f.err }
 func (f *fake) SetThresholds(_ context.Context, t api.Thresholds) (api.Thresholds, error) {
 	return t, f.err
 }

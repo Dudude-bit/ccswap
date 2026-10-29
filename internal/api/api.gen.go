@@ -58,6 +58,9 @@ type Account struct {
 	// LeavesAt Account in use only: when it reaches the five-hour, weekly or a per-model weekly threshold at its pace in use over the last hour, whichever comes first; absent when the pace is unknown or flat, or the window resets first
 	LeavesAt *time.Time `json:"leaves_at,omitempty"`
 
+	// LoginEnding The login ends within 72 hours or has ended, and wants a new login: the daemon then announces it, and clients flag it
+	LoginEnding bool `json:"login_ending"`
+
 	// LoginExpiresAt When the login itself ends, as Anthropic said at its last refresh: a refresh does not move it, a new login does. Absent when unknown or while it needs a login.
 	LoginExpiresAt *time.Time    `json:"login_expires_at,omitempty"`
 	Models         []ModelWindow `json:"models"`
@@ -112,7 +115,7 @@ type Error struct {
 	// 403 bad_code (web session: the code is wrong, used or expired), read_only (TCP listener only: the read key on a change),
 	// local_only (TCP listener only: a change or a web session on a listener that is not on a loopback address, or under a Host
 	// that names no loopback address or localhost);
-	// 404 not_found (also an unknown language of /v1/i18n), no_entry (adopt: Claude Code has no login);
+	// 404 not_found (also an unknown language of /v1/i18n, and a login code of an account removed meanwhile), no_entry (adopt: Claude Code has no login);
 	// 409 duplicate (also migrate import: an email here already without replace, or a name here with another email),
 	// remove_active, active_account (import: re-login the active account in claude),
 	// claude_owns (refresh login: the login is the one Claude Code uses, and Claude Code refreshes it itself),
@@ -120,8 +123,9 @@ type Error struct {
 	// target_refreshing (the target login has no access token yet: the daemon is refreshing it),
 	// unknown_active, cannot_identify, needs_login,
 	// migrating (the account is being moved to another machine: an export holds it),
-	// login_gone (login code: no link of the account waits for a code, as none was started, or it expired, was used,
-	// was replaced or the daemon restarted), wrong_account (login code: the sign-in was another account's; the link is spent),
+	// login_gone (login code: no link of the account with this id waits for a code, as none was started, or it expired,
+	// was used, was replaced or the daemon restarted), wrong_account (login code: the sign-in was another account's; the link is spent),
+	// login_pending (login: another link of the account waits for its code, until it is used or its 10 minutes run out),
 	// migrate_active (migrate: the account, or its login, is the one Claude Code uses), export_gone (migrate: no such
 	// export: cancelled, expired, or forgotten by a daemon restart, possibly after its commit landed, so check
 	// whether the accounts are still here), export_done (migrate cancel: the export is committed already),
@@ -161,12 +165,18 @@ type Language struct {
 type LoginCode struct {
 	// Code The code the sign-in showed, CODE#STATE, or the callback URL that carries it
 	Code string `json:"code"`
+
+	// Id The id the link came with
+	Id string `json:"id"`
 }
 
 // LoginLink defines model for LoginLink.
 type LoginLink struct {
 	// ExpiresAt The link is dropped then if no code came
 	ExpiresAt time.Time `json:"expires_at"`
+
+	// Id The link's id: only it finishes or cancels this link
+	Id string `json:"id"`
 
 	// Url The sign-in page claude auth login printed
 	Url string `json:"url"`
@@ -372,6 +382,12 @@ type ActivateAccountParams struct {
 	Force *bool `form:"force,omitempty" json:"force,omitempty"`
 }
 
+// CancelLoginParams defines parameters for CancelLogin.
+type CancelLoginParams struct {
+	// Id The id the link came with
+	Id string `form:"id" json:"id"`
+}
+
 // GetI18nParams defines parameters for GetI18n.
 type GetI18nParams struct {
 	IfNoneMatch *string `json:"If-None-Match,omitempty"`
@@ -539,24 +555,24 @@ type ClientInterface interface {
 
 	// CancelLogin performs a DELETE /v1/accounts/{name}/login (the `CancelLogin` operationId) request.
 	//
-	// Drop the account's sign-in link and stop its claude auth login, if there is one.
-	CancelLogin(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// Drop the account's sign-in link of this id and stop its claude auth login, if there is one.
+	CancelLogin(ctx context.Context, name string, params *CancelLoginParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// StartLogin performs a POST /v1/accounts/{name}/login (the `StartLogin` operationId) request.
 	//
-	// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints. Signing in there shows a code, which /v1/accounts/{name}/login/code takes. One link per account: a new one stops the one before. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login.
+	// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints and the link's id. Signing in there shows a code, which /v1/accounts/{name}/login/code takes with the id. Signing in on the daemon's machine, in the browser tab claude opens, finishes the login without a code. One link per account: while one waits for its code, a new one is refused (login_pending), except on the unix socket and to the admin key, whose new link replaces it once it is up. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login, and only as a new login of an account here.
 	StartLogin(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// FinishLoginWithBody performs a POST /v1/accounts/{name}/login/code (the `FinishLogin` operationId) request,
 	// with any type of body and a specified content type.
 	//
-	// Hand claude auth login the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account).
+	// Hand claude auth login of the link with this id the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account), and the account must still be here (not_found): this never adds an account.
 	FinishLoginWithBody(ctx context.Context, name string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// FinishLogin performs a POST /v1/accounts/{name}/login/code (the `FinishLogin` operationId) request.
 	// Takes a body of the `application/json` content type.
 	//
-	// Hand claude auth login the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account).
+	// Hand claude auth login of the link with this id the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account), and the account must still be here (not_found): this never adds an account.
 	FinishLogin(ctx context.Context, name string, body FinishLoginJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// RefreshLogin performs a POST /v1/accounts/{name}/refresh (the `RefreshLogin` operationId) request.
@@ -840,9 +856,9 @@ func (c *Client) ActivateAccount(ctx context.Context, name string, params *Activ
 
 // CancelLogin performs a DELETE /v1/accounts/{name}/login (the `CancelLogin` operationId) request.
 //
-// Drop the account's sign-in link and stop its claude auth login, if there is one.
-func (c *Client) CancelLogin(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCancelLoginRequest(c.Server, name)
+// Drop the account's sign-in link of this id and stop its claude auth login, if there is one.
+func (c *Client) CancelLogin(ctx context.Context, name string, params *CancelLoginParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCancelLoginRequest(c.Server, name, params)
 	if err != nil {
 		return nil, err
 	}
@@ -855,7 +871,7 @@ func (c *Client) CancelLogin(ctx context.Context, name string, reqEditors ...Req
 
 // StartLogin performs a POST /v1/accounts/{name}/login (the `StartLogin` operationId) request.
 //
-// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints. Signing in there shows a code, which /v1/accounts/{name}/login/code takes. One link per account: a new one stops the one before. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login.
+// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints and the link's id. Signing in there shows a code, which /v1/accounts/{name}/login/code takes with the id. Signing in on the daemon's machine, in the browser tab claude opens, finishes the login without a code. One link per account: while one waits for its code, a new one is refused (login_pending), except on the unix socket and to the admin key, whose new link replaces it once it is up. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login, and only as a new login of an account here.
 func (c *Client) StartLogin(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewStartLoginRequest(c.Server, name)
 	if err != nil {
@@ -871,7 +887,7 @@ func (c *Client) StartLogin(ctx context.Context, name string, reqEditors ...Requ
 // FinishLoginWithBody performs a POST /v1/accounts/{name}/login/code (the `FinishLogin` operationId) request,
 // with any type of body and a specified content type.
 //
-// Hand claude auth login the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account).
+// Hand claude auth login of the link with this id the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account), and the account must still be here (not_found): this never adds an account.
 func (c *Client) FinishLoginWithBody(ctx context.Context, name string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewFinishLoginRequestWithBody(c.Server, name, contentType, body)
 	if err != nil {
@@ -887,7 +903,7 @@ func (c *Client) FinishLoginWithBody(ctx context.Context, name string, contentTy
 // FinishLogin performs a POST /v1/accounts/{name}/login/code (the `FinishLogin` operationId) request.
 // Takes a body of the `application/json` content type.
 //
-// Hand claude auth login the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account).
+// Hand claude auth login of the link with this id the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account), and the account must still be here (not_found): this never adds an account.
 func (c *Client) FinishLogin(ctx context.Context, name string, body FinishLoginJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewFinishLoginRequest(c.Server, name, body)
 	if err != nil {
@@ -1577,7 +1593,7 @@ func NewActivateAccountRequest(server string, name string, params *ActivateAccou
 }
 
 // NewCancelLoginRequest constructs an http.Request for the CancelLogin method
-func NewCancelLoginRequest(server string, name string) (*http.Request, error) {
+func NewCancelLoginRequest(server string, name string, params *CancelLoginParams) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1600,6 +1616,29 @@ func NewCancelLoginRequest(server string, name string) (*http.Request, error) {
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if queryFrag, err := runtime.StyleParamWithOptions("form", true, "id", params.Id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+			return nil, err
+		} else {
+			for _, qp := range strings.Split(queryFrag, "&") {
+				rawQueryFragments = append(rawQueryFragments, qp)
+			}
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
 	}
 
 	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
@@ -2421,14 +2460,14 @@ type ClientWithResponsesInterface interface {
 
 	// CancelLoginWithResponse performs a DELETE /v1/accounts/{name}/login (the `CancelLogin` operationId) request.
 	//
-	// Drop the account's sign-in link and stop its claude auth login, if there is one.
+	// Drop the account's sign-in link of this id and stop its claude auth login, if there is one.
 	//
 	// Returns a wrapper object for the known response body format(s).
-	CancelLoginWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*CancelLoginResponse, error)
+	CancelLoginWithResponse(ctx context.Context, name string, params *CancelLoginParams, reqEditors ...RequestEditorFn) (*CancelLoginResponse, error)
 
 	// StartLoginWithResponse performs a POST /v1/accounts/{name}/login (the `StartLogin` operationId) request.
 	//
-	// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints. Signing in there shows a code, which /v1/accounts/{name}/login/code takes. One link per account: a new one stops the one before. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login.
+	// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints and the link's id. Signing in there shows a code, which /v1/accounts/{name}/login/code takes with the id. Signing in on the daemon's machine, in the browser tab claude opens, finishes the login without a code. One link per account: while one waits for its code, a new one is refused (login_pending), except on the unix socket and to the admin key, whose new link replaces it once it is up. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login, and only as a new login of an account here.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	StartLoginWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*StartLoginResponse, error)
@@ -2436,7 +2475,7 @@ type ClientWithResponsesInterface interface {
 	// FinishLoginWithBodyWithResponse performs a POST /v1/accounts/{name}/login/code (the `FinishLogin` operationId) request,
 	// with any type of body and a specified content type.
 	//
-	// Hand claude auth login the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account).
+	// Hand claude auth login of the link with this id the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account), and the account must still be here (not_found): this never adds an account.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	FinishLoginWithBodyWithResponse(ctx context.Context, name string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*FinishLoginResponse, error)
@@ -2444,7 +2483,7 @@ type ClientWithResponsesInterface interface {
 	// FinishLoginWithResponse performs a POST /v1/accounts/{name}/login/code (the `FinishLogin` operationId) request.
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
-	// Hand claude auth login the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account).
+	// Hand claude auth login of the link with this id the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account), and the account must still be here (not_found): this never adds an account.
 	FinishLoginWithResponse(ctx context.Context, name string, body FinishLoginJSONRequestBody, reqEditors ...RequestEditorFn) (*FinishLoginResponse, error)
 
 	// RefreshLoginWithResponse performs a POST /v1/accounts/{name}/refresh (the `RefreshLogin` operationId) request.
@@ -4212,11 +4251,11 @@ func (c *ClientWithResponses) ActivateAccountWithResponse(ctx context.Context, n
 
 // CancelLoginWithResponse performs a DELETE /v1/accounts/{name}/login (the `CancelLogin` operationId) request.
 //
-// Drop the account's sign-in link and stop its claude auth login, if there is one.
+// Drop the account's sign-in link of this id and stop its claude auth login, if there is one.
 //
 // Returns a wrapper object for the known response body format(s).
-func (c *ClientWithResponses) CancelLoginWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*CancelLoginResponse, error) {
-	rsp, err := c.CancelLogin(ctx, name, reqEditors...)
+func (c *ClientWithResponses) CancelLoginWithResponse(ctx context.Context, name string, params *CancelLoginParams, reqEditors ...RequestEditorFn) (*CancelLoginResponse, error) {
+	rsp, err := c.CancelLogin(ctx, name, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -4225,7 +4264,7 @@ func (c *ClientWithResponses) CancelLoginWithResponse(ctx context.Context, name 
 
 // StartLoginWithResponse performs a POST /v1/accounts/{name}/login (the `StartLogin` operationId) request.
 //
-// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints. Signing in there shows a code, which /v1/accounts/{name}/login/code takes. One link per account: a new one stops the one before. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login.
+// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints and the link's id. Signing in there shows a code, which /v1/accounts/{name}/login/code takes with the id. Signing in on the daemon's machine, in the browser tab claude opens, finishes the login without a code. One link per account: while one waits for its code, a new one is refused (login_pending), except on the unix socket and to the admin key, whose new link replaces it once it is up. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login, and only as a new login of an account here.
 //
 // Returns a wrapper object for the known response body format(s).
 func (c *ClientWithResponses) StartLoginWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*StartLoginResponse, error) {
@@ -4239,7 +4278,7 @@ func (c *ClientWithResponses) StartLoginWithResponse(ctx context.Context, name s
 // FinishLoginWithBodyWithResponse performs a POST /v1/accounts/{name}/login/code (the `FinishLogin` operationId) request,
 // with any type of body and a specified content type.
 //
-// Hand claude auth login the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account).
+// Hand claude auth login of the link with this id the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account), and the account must still be here (not_found): this never adds an account.
 //
 // Returns a wrapper object for the known response body format(s).
 func (c *ClientWithResponses) FinishLoginWithBodyWithResponse(ctx context.Context, name string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*FinishLoginResponse, error) {
@@ -4253,7 +4292,7 @@ func (c *ClientWithResponses) FinishLoginWithBodyWithResponse(ctx context.Contex
 // FinishLoginWithResponse performs a POST /v1/accounts/{name}/login/code (the `FinishLogin` operationId) request.
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
-// Hand claude auth login the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account).
+// Hand claude auth login of the link with this id the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account), and the account must still be here (not_found): this never adds an account.
 func (c *ClientWithResponses) FinishLoginWithResponse(ctx context.Context, name string, body FinishLoginJSONRequestBody, reqEditors ...RequestEditorFn) (*FinishLoginResponse, error) {
 	rsp, err := c.FinishLogin(ctx, name, body, reqEditors...)
 	if err != nil {
@@ -5771,7 +5810,7 @@ type ServerInterface interface {
 	ActivateAccount(c fiber.Ctx, name string, params ActivateAccountParams) error
 
 	// (DELETE /v1/accounts/{name}/login)
-	CancelLogin(c fiber.Ctx, name string) error
+	CancelLogin(c fiber.Ctx, name string, params CancelLoginParams) error
 
 	// (POST /v1/accounts/{name}/login)
 	StartLogin(c fiber.Ctx, name string) error
@@ -6011,8 +6050,24 @@ func (siw *ServerInterfaceWrapper) CancelLogin(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter name: %w", err).Error())
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CancelLoginParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Required query parameter "id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "id", query, &params.Id, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter id: %w", err).Error())
+	}
+
 	handler := func(c fiber.Ctx) error {
-		return siw.Handler.CancelLogin(c, name)
+		return siw.Handler.CancelLogin(c, name, params)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -6778,7 +6833,8 @@ func (response ActivateAccount500JSONResponse) VisitActivateAccountResponse(ctx 
 }
 
 type CancelLoginRequestObject struct {
-	Name string `json:"name"`
+	Name   string `json:"name"`
+	Params CancelLoginParams
 }
 
 type CancelLoginResponseObject interface {
@@ -7873,10 +7929,11 @@ func (sh *strictHandler) ActivateAccount(ctx fiber.Ctx, name string, params Acti
 }
 
 // CancelLogin operation middleware
-func (sh *strictHandler) CancelLogin(ctx fiber.Ctx, name string) error {
+func (sh *strictHandler) CancelLogin(ctx fiber.Ctx, name string, params CancelLoginParams) error {
 	var request CancelLoginRequestObject
 
 	request.Name = name
+	request.Params = params
 
 	handler := func(ctx fiber.Ctx, request interface{}) (interface{}, error) {
 		return sh.ssi.CancelLogin(ctx.Context(), request.(CancelLoginRequestObject))
@@ -8460,112 +8517,117 @@ func (sh *strictHandler) OpenWebSession(ctx fiber.Ctx) error {
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"3D3tbhu5ta9CqBeIvRjLziaLbuVfWe/eNkB2u0hc7I9q4VIzRxKrGXJKcqyogYH7NPfB7pNcnHPIGc5o",
+	"ZMtpnGb7K5bEj8PD8/3BfJjkpqqNBu3dZPZhYsHVRjugDz9Yayz+kRvtQXv8U9Z1qXLpldHnf3dG43cu",
+	"X0Ml8a//srCczCa/O+9WPedf3Tmvdnd3l00KcLlVNS4ymU3iD1lYiPZ+leem4S1ra2qwXjFQMvfqFvAv",
+	"v6thMpssjClB6sldNsnXkG+guJE0b2lshX9NCunhzKsKJlmc5LxVeoVzoJKqTJZLftFyUUIxvhVE3OxP",
+	"e7+WjfMHJ8afbyzIgMC9NZbqFm7WprEPIfUXpQuzpSkWIBx8gN64oZCMUyeMLnczsV2DFrLx5sxtlc/X",
+	"Ivzq1xCHClxVyJVUOqPvS+nBeWHBgRdmSd9tCQYnpMePygq/tuDWpiycMJaGgC5wtBSlqpQXa+UzsV2r",
+	"fA23YIVytK69FHLhQPsAmViUJt8ovQo7PHNhX+VEozfabPUkO/KWS5C34EbxEyhNKC0aByluFB5U5mtg",
+	"nOClnOGlZGILsCl3eDoparBnlSmgjN+2x0eMKO9ELXNol8cDMyadF2G1FhO5qcCJpbLO95GBM3iZ9uy4",
+	"+7KUPotIZiwxjsIix+PHrJS+AV3g5z0UXSO8OAIv0omt8mulxe+/JvjpktfS4W9QZELqQmwlEpIUGrY8",
+	"cUYQFhIqQ4fRQmptGp2DE0gMOCkvFdI2HmollO/ATLgnwPm+VvbAdf4S0cUAK++gXBLcmZBOvNJ+bU2t",
+	"cuGkam+ILsPCEi9uJmT8UxQGnNDGi8rcAgPanYl+nYpXyTUlV7NdqxKnCA1QIC5ozvToGyGSIomnPFTu",
+	"IUHwIw7vpEFYTlord/hZywpGJQ1Bd0Owjcur2ipjld8lvyrtYQUWf3VwC/qmkLvjBZU3G3jMFT5zKI3A",
+	"OUEzhW20E6bxM7EMhC87Dr4qZVOAuDIFsMDiOcnXggUTEly4ZXCX7VLGr8G6TOS528r6mRO5qXeBQ1MS",
+	"bqeK5xeiUrrx4MQClsZCQhFjFBC5NSyEjIMEZkEWOHYH/lgaucsmFv7RKIuq5q98xVGfJffWKbL+bWdR",
+	"laYqayAJWjL8td3dLP4OuceLDILzZ+nz9b6evld73kdUd2NbFab2b+EfDbgRk+AgcT+wzR72Rk/ZeHNw",
+	"53sOOVg/jhzb4kp6WZrV/vKlZGm8L66lXjVyxaMG6v4W7E7EAYGQkcwm2XGS5E2YOiZGKnAubiuLQuGe",
+	"svw5AdrbBoYG3jW892KxExvYoXDlY5AWER8u7sSH53fi//7nf0VdyhyQO4kDv/pqYcriq6+IU/+WmwL+",
+	"JippNy4LardsrCxFgAhFOwryqzffv0Vmrpw4+TCfGA3zyQxXz8R8QswdPt+dZqJWaC0iZNKumgp59mIy",
+	"cj+RvkaUYsDVMydwkGgVzoPcSlebRabt7jPB8RiptCZ5n1AQPYdIISdZuNgJ56Vv3CWKG9S6WtTSgvZr",
+	"cODECVsYdJRg4smC7R5cwImlNZXwa7TVlPOn07l+eXEhFhLtWOIOcVLJElEPKFnpq0zI0hkhtYCq9rsg",
+	"AHG900wofStLVdwgCrpPne3Yfee8lR5Wu+4bxFf3yUJlfLJGbvRSrW4KZcWJqmpj/YxkbJTA+INiDRPZ",
+	"w1QIEss+pZErSvCQzbU2/mbR6KIEcVKpFQIi+muGJXjQaRb+uLkF65TR+7MqWQDRHFoSaPPR/NNsrjv4",
+	"i5Hd4lWgCdhiGveTxUEIpdhao1c8j9imkJVcIdEHcOcaf7uxsGwcFOIkWGs5K8yV8UKbgLaoI3HCJetn",
+	"pTcIjqtB+9NLJInnotGy8Wtj1T9xveurn4lgQIMNtrU2KAkYHAbPaODZL+g0fP4tLIQDh0jsH57mZILg",
+	"NVawJYGYQJK9wT1Gt8UlSMvS5uhf5GupV4SD0uSyPDw1Dg0wd4DxOu1ov5bknSBh8C/G1AuZb4QsCguO",
+	"ZVejC8B1/mScn2uagzzgGNP9CTiegFsbFzD8Epe/WZpGF+Ik8lc0PFu5b5bi/Pb5uXr+rWbrWibcR76Y",
+	"bu0m5J9bKEQFUpPRcpoJbW5Ae7sTJxJ176xvQknXkgUD9QdRNBwYgADUHimiEJCqFGuwIGSJV7EjJWAa",
+	"BIGkf5DtJEtpHCkJqUly83y8Lgb4hu2XTPC/N/E4Lc9bOOMzs5GIg1JbkWmcWID+ujFb7cRJtP0TvyW4",
+	"EiwOjYYeMhoHjlGcftsZiMoHnYA7aZD2JvyWCcLwDdNWIU7S+RuoEStbqzwqS3JSWHg1pD0REnbbT+M6",
+	"gRF66wyN5zBmhlC1pmfDvC1FuPy59tKuwEdAcT/SD/x1ACQQQW/5Hfiep6ecSNZQHtcOpNreXi5JyKoC",
+	"tFfLXSYSIzWba6ajFoT2/tDcxm+ZdL1pqaSS+VppYIp7j5QQTH7enmX8Cm/xpOMIkkokzkJQI+5DBEhq",
+	"T6Fbi/fAuGK1SjjQILbSoX61Hj1gYxG9AdXZXOOPKK0yGhZIvRg4AhbC/NOMJVxHzymYdO9qpc+UptXi",
+	"qcPgZ25MMrfHrtmub8V8nD168vaw+C8ft9FelUTRrpW/+GviBCE1mYb2DCIg3HSrnWbpNllcgu/7PiZD",
+	"Qqf7DLfXLqeNcE2+nmv+eYYklUNZIsbjLVC0xNiV8R40q98+4jNRG+fUotwJufQQT11VyqNUpdCGM4JC",
+	"jHO9XQMhLjmJE9KCcF6VLOM6cIsU3AAcIyHQp4o7UZSORSOxITKV6wREuwQNnnUyPQxwSucUJ9oovboc",
+	"7hCRgisHI4XIY2g2MM0HMmU4efizKIMiQUdYyaZkFndhEShQMXxzcSHQ47JalvTx62geNToEaz9ud3aZ",
+	"WcQWg8DOUqqSSBOtN4G+M00pYelHAc0E6jkKcpIRQavehFWG6qDbplAFW4DaoRmH20UriiREYC2O8qJp",
+	"gAYBI5zWuuyFxKwCxzCg5YC0p9Fr8irfdOwbYeobaWhutZYtwxQoeiVvoRNsdghyZ1RpQhMa9aOhKPZI",
+	"RkKnogAvVXnZxu7c2mxDFBjNEY9nqCmwWTwcwQiD4nZj/s9rurOD/nhn+Y8Huz5VoCBLdxqDE53og1BG",
+	"t36IzM5pJwN4PgE9n2TCAbS23KmolXYhgNyZetFnJDNEG6+WIUdDfh7DOvWmKi/FfDKfiKUpS7MN66B5",
+	"Ccc5rIeO2gTyGPdKj72HcXI4GJl5gyR/FfY4xh++jvSeKlGkWJQBV3/+/offvbt+df1DG1DPZVmSMf6X",
+	"t2/Yts+lJUZNo9PdsVQxvqcqOp2co2mLIu5BhKuCyKy45/BvlN6MBKXuCa1eJ7ZBYU1dQ8HheLVEQUHY",
+	"yZnCjwtTHzozbvIMjaYZ+VBoMyyVVmQRGxuUkYsBBb0ZW7ux5fji8e5qYpY9KVhbZN7iOAzjJlmKszFs",
+	"/8gq6gdSpvsYZwU1Divo3O7qXvoNtdW7q9evhbSVsWMnP0y/RvNdREKWXpgagkhgOC5ZCiv0QdGl0pRa",
+	"ct5YOEC4D1HMiBHBBOMTu2WxI0o6mnLIuNnf7ydyhYkuwrbekPgLZsJ5sMlQ0vW+JsgevHPeNYtXlkUp",
+	"8xgCuDcQ3U/Z7OtSpV/zj8+H4dURRePuA4Z14ViGnOns6NxRzLXfPQBRu/CDQB3EUMcpB2l+74dgC+6T",
+	"ylv+IXHR+3GNLoJAAh8lb8yOPBCtH1JHBOGeg18jYR08d0vsx1Dn6C5Jfu/4BAjngh9VD9F4Vap/SkZx",
+	"Osk0i9RM0E21OGwepauMHecthWwPqGgOqDYU10d/UG5AU/x5mBNHJcb2s3Sb1AXggMuU0mA9u6BXINLf",
+	"+o100TI+Woa1VSDDBOauy/FLtwkuyWWnAjgF7jY9f8JC7svd2D5mcyj/EDZYkVXfgb+fcgvK9H76Y2Vo",
+	"Nvfc2UES38DugMoiP6jNqFZSyxVQtmUDu0thgv7YANSsxkhVFajqjrYK1t7XbnZ+Pp1OyXzDzxQU6iKq",
+	"xqJhcIueZgiuXoa0hG+sdoKzCIHszPLhFA4CMoand2u1PCyWx+t9rKn2D/Wj3IkFiAoVN/mPX78MFRdy",
+	"ZR6hZ0d8DWajNqLfWIufOfn2cenneLxwmFHEqJWW5UECquWuNLJ4KLc4WHYARlxkdH8ta7c2B4ycQnrJ",
+	"RUrzifPSw3wi4BbREmLp9MHtC5VPp2+zCefoHlrgHY8anj1Mzu5X1O/aLQ4V1g3ro3qB87bMADmH5LBG",
+	"Rp3ppixHqE82TH/7AokKlG6WFuBABQhQ+jIJ+MZiHUXBrxgmJBsYl3GiqbnsKRZspMVtlblFu9KgHHBe",
+	"7pwwWpxQiJMr54TDL/FEp62eIdG1VQ64oocOyxEl5USsQNs789q4ERq7MlXdeAq7oCHNSo6LWfQlHcyB",
+	"90qv2ItnsNGlr+tyh4Cn8VBPtg16VqPVXNJ5jroqvxtVdj/BFpzvL2ml5iFia5WHvrJ9dMEdglCbsnyU",
+	"8UGz+OSHdXSsVmQMVrLoQOUKnFCt96j6N0rhjQuGmIrDVXvJwZPrF0ml0RYW5JCeUm6C0nPeZBSZRo/v",
+	"+de/n15ML6bPZ9++eP5tgtxQJKTcuNLJJhre31O2OE7jOpjFIfSOfBLrpgZVlo03YW+kcUpmUHBfLspR",
+	"TNnWcrtPQgX7DiUaakM3xuJGrKHsZ8361ZFR3WUC9ZLzsTByX2U9c4L2iUkp0KEQkXnV807aMM92DgKP",
+	"pqnHlsewdh8V3Vyl8LDwDuNwDc6zObC3Kh834buCiIcWvu5GopnUS7ONi+BQozC671ZaPVoM+pPRZ0vp",
+	"ZSnCkJg4ojtDjcJm/0MGQ9w8yMukHI10RoLQvcPsIa6HppbmxrVfd0v9c31n/FrUjRdSrNUKTdYYFWa6",
+	"m871UpXlGX2YxSJY2Y7KxvKGaL05L6xB54XMUDJKhxtIJ5whN4aLjnNkBDed61zmaziTW2lh9uj5mSjV",
+	"BiVhhPryQajXxsFch0JmhJqzrvhFNqh0dqex1Bi3pmofZ4Ik4zRHkMb8VWki635DRdSxXDkpSZ9rNEht",
+	"o5mqGj8Vv5B4rK2pai9yrsWW6NVLW+HCLPH2TpUuZ6huSfoIbTu4kDuujPCiBHb+SN6kWiSKmSS9SrJ1",
+	"WA2xANBCFSXwpnElJoBbEqloZnCCBXRTIQd0FzPJJslNJ4Tb8WMk3IPm8+Plz575GH4Y45vrnhga8aoD",
+	"b944yI0uRgT+n8xWmKUHnfrpDr3XkDFDZEXva1jX27hEGSX1x7w1V+0eszXTYrcn25iDFProTr2WjAej",
+	"ItlkvXMeLDjljpxQKX1TbKEs03M8UHH92OhMd4h0oR6wY4Bk41d8AP1j5PMLLO7P1DwQk/4Ih/S4wO4v",
+	"sHjHtVyPiGjIolKaoxexbDKEL5RvKya8XBww0AeA4jb3g3ZPvrM4NpE2usOBeOLnDxveHy/E0UovRwIZ",
+	"b0wuS/Hq59dRZgSvgMOCmUADAQq2K6VotHovnMk34KfiemjOm6UIBj2bjolNz+u4ua6lpXiA8uLE5/Vb",
+	"04Ra2ljlcM47n9MEO12Z01kspTWDEsRQPRJpKQtlHO1I+mWucSzCQ2m0A1WFlPYFPuTS2Byi/zgVr5KG",
+	"lX543MtN6GzqlUXq3Vy3Cy8azxv3QI3lGdTUoPSG9et+wRAjua0qfu+dOImZ7PMPpdSru1Mq96JKjQ3s",
+	"QgGC8iVef+8u8ZInick6eY7uFAVHa9CyVpPZ5MX0Yvpikk1q6ddEyLhZGp5ZAZF0a6S+LpCGlPOv4qCs",
+	"3wL59cXFoxog/8V8y15v5KuybIPGOP4bhmds9RbutNOyHg1FvPPRvmG6oJJksok8VLWx0u56Fg4XEFDd",
+	"NJWctSR0ggZWrLKkejvlqFbPaDidTrIBpjk59KqNFIYy8e9Msftkbab9BNRdX9B428Ddv3jFR93s/k2+",
+	"46C27O7+5SPuEkf/4RGjH0cnd1mPU86p5JfUwij5vIUVykybUFCwk8vdoAmrTy/7FEGNPU9LEL3eoS+H",
+	"Hgisf40gXn6h5PNBywrumG5K4GBR/9rfUgF3eu+9C3g5RnNU6PtlHRw1jZUVeLBuMvvrh4lCUFH7xLql",
+	"WUyI9mkuS+hnaLv9SvqLW+r6WKNOuydmlrSn78thlr/UaHx+Nmb5FOR/Ts6SZOp/IjIJ0nkgUsO+HaGM",
+	"7f6PBuyu256Mxkm6XwFL2ZR+MlvK0sFIxcSvT0gKbYJrRI3iL6FEu2uC+M8Tn+dtT3YnRPuo+N6aOo2T",
+	"PHNtYVxXz8+NC5RQ8qZmy3xYMJcJtQwZJeXQdNvX01dUXfUmNA4PCOr4iscx0qMqvEfR/cPa4ifTVjmW",
+	"wOH6L0SyH7DH0a2UfU+t1yQh24xh9/RAr9OGsjv7pZAU36SiEJdUQqVUojzXS7rW6W1LN6finVpRLJZ7",
+	"qCxQZaFru184y3qQeM+5RpHczHbzwbL8HEQ4BVWHUPdOFhs0F9ZsHbK6XMTjUb1j1pWTdlZo7CaTwfv8",
+	"sw40WHfhvVlIuXHXzn6LC99CSIP12yJj+wx1duRQ+wh9EldgLJqha0+Bdb5fhKf1n0ORZmypqdFfpxHa",
+	"eG6xCOHqpMOmK92dip/gtt+Fstc1I0767XGnEZhAaOjc9xvXNGzdSHhkJFwQktBC6l0Si3BJxKCVTGar",
+	"W7rLpQ63191d1sU4pBuywqCmb188EQNF6fRkWqmruR5RTNcDxvqSdAyO/voTaaTzGHP8nALyT/w+zFC6",
+	"xcQjMkyvUa/rbPFuUOkvTh6o9D+N2rIXIlFerIBrt3uE3TIsswfKDW7UYwuFOIO7bRYkmBay7Y4PTL8y",
+	"KO64RbejeurgCWLz4F1wwxDzaojkNM6LBYwwHzffnvRaC0+zVuhH/qIFuIltEXpwT9p+49MZYziEGovi",
+	"fuf+v4nHO7b89O5K1wLy5fgq18MsMDdzhYv97Rqqn0iIhH66zy1B3oY2vj5jMNNos80iYwdzih5+2nva",
+	"h67ywGNEzLzpj20VWumMqC3X5rScyjy2NXbjpuK1Hzw1NXznKtX0PH9fzydd7Kdx70Mt6VQeLV6lbwCE",
+	"Zsr2eQI+upArE5804LQpy5w9Zg8IfnIlfCTndQ5iJLj/AFYKtZR1M+L2vwP/iutmniQulLyCdJSoHXHK",
+	"vjcaHi/+PsqX5lLdJOMz8LcoOXdGVXA8dDZS9stmMpUFKzRJY/mwkMFoZ4s11BBw8i4q8vlkJmqlV/PJ",
+	"XOemqsJOdieefyMoYbgAvwXQnPHqX+Ufwf/AB3iQjzy893zaM+ctyKp/pUPxuP/2Jp00TP1YbCfpvIMo",
+	"v06yqW0yMPh4aScrPzOxygSULv2i9e3a5/pcs/By5cRJ7c++e5txS0XtTy/FD3pVonOxJfOFcpPtFuvw",
+	"YsNU/GRiynOvsBMUervp2x8utwA6vOTm11DFQuNgP+2oEJGKCSG3MGIM/RH86+ff6gPhuDVIrrwPiu/1",
+	"8uwno+HsRwrEPi4e8ulkbXyY7ICspUucZAF42v2KqpiujPbWjLRpaHNGdU6P0unZ5IdrOVKIeBXS5W1o",
+	"YdGosmgt2gjd8RvhVi/GJFfvNsJjPWl12GdHxOPO9Bi1NxL6Grapf3f1s3j5+46liF1jmfN8Quw4n8Ro",
+	"X9+gC8+ePcKgCzIm9swf0n1vuoU/uZOR9PL/BnTfoCH2YBaXwsfdGznp21VtU+9ltHi5SNN5GYI+zGRy",
+	"i+5v/x0VemUFPWVWd7z6w4+rzEiTJs+7UGmZOOKdlan4SxJ+M7rc7Qvf0KN5FXuEn4JMxvpAP5ZcrtPj",
+	"tlj/IosG+m3Z9xUNkGPTu0gO7cVHmsBC1nYuKMual287vhXT6ANP3UjB1YeRqILhwD2/vH4Mg3998TLG",
+	"TX5TtMv4/Y3RLh43Pi/3xZMwdM87jJLwz1RzF4+mtOenLdsHHsIrjN6ISOrVyMNkbDMuLcA/w5gTbUT7",
+	"JhyakNzNw1mE6jS8ujXyBgJjNhikHIy3I48iZHuPXeG4b9rgRqmWnnumCCiOJx5+X4LeTgrt1/HxI6Tc",
+	"42k5vKPxpLTcf6rhM4cH++c8YD4HbCI1xPTTf0AaO5Kequ5npldFsa8MIk7osdl91syELMvYppalb3gL",
+	"kHmb84wPn3AIzNX0aH3vIbE4i+J04T06pmROCZq0SYHSAev4XFKcqjTv2QUTk3cLaQ49DjAVvyTvmWVj",
+	"75kNqnK5VSXkB1GbxMR8F6ILvmcISkq9a98021q023rZtGQe75cuPhO9l+Bw1t4DbZwE5eQtXSoqzhaD",
+	"VPlrmpIb+FNU1tRTs0Cn/cVF0M8upuRjjrRN/LbPnT1CjoQXUJ5Ujvxb60n75zwU8iyK5HWhL0nDfmSc",
+	"M00RjJY4hVjz5DGe10cJs67ZNfidA+zLTWxZIokVNX0o1ThpbNmK9w3sToXSzoPk/wvF0X9t0oqZy+6Z",
+	"bJzGb1KQJbs8hiPegQ89t0/DDf3HP34DbrCjxybu8UfkdvDfQpiNULpuRmJ3/HDFE2G2/yrGx2L2VZ4D",
+	"GqGfC7vtIxKjLRV/BP8uPkbxbygS/J6N3QDkx5+xa6g8FHZ61/UoPwltDJo+fwN81+9XHxWb6btd7Ovw",
+	"i9ZxYu9lVHqLwrXOVPKWJadaELfx92D5jUrH67RB/CnuKm2//7xWwnDnoYnQ/m9caLMul6H57zPQwhYW",
+	"XbnQuBcweNDwxCm9KimjnQn63xDaTPQp25q9tjxvJf3fFMNeOqSECEB4qv8YJXplQXqIvapPeGNxiwMW",
+	"XXQFPxrpLmlpHcX7NSIu1El23la8rxGE7uXIiKKmYuR/S1BpayEt19VlUjHkaBMjTb4cKafkqN3Li5f7",
+	"9/XnGnTSwPs0fL3fhvuZ2Ts54UEPIFzTxxj/L76UNgpqbre3Me1E77zRw26z83O2qCd3v979fwAAAP//",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

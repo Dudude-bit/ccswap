@@ -6,7 +6,6 @@ const TIMEOUT_MS = 60000;
 const KEY_ITEM = 'ccswap-key'; // the read key, typed in: the page only looks with it
 const ADMIN_ITEM = 'ccswap-admin-key'; // the admin key a ccswap web code was traded for: this tab only
 const HOUR = 3600000;
-const SOON = 72 * HOUR; // a login this close to its end is flagged, as the daemon announces it then
 const TAGS = 8; // account colours, .c0 to .c7 in app.css
 
 const $ = (id) => document.getElementById(id);
@@ -90,12 +89,13 @@ const where = () => state.status?.host || t('host.any');
 // and timeout. Any other code reads e.other.
 const ERR_CODES = ['offline', 'timeout', 'unknown_active', 'internal', 'entry_expired', 'entry_changed', 'cannot_identify',
   'invalid_thresholds', 'target_refreshing', 'not_found', 'needs_login', 'read_only', 'local_only', 'bad_code', 'migrating',
-  'claude_owns', 'refresh_failed', 'active_account', 'code_refused', 'login_gone', 'wrong_account', 'login_failed'];
+  'claude_owns', 'refresh_failed', 'active_account', 'code_refused', 'login_gone', 'wrong_account', 'login_failed', 'login_pending'];
 
 const errArgs = (e, name) => ({
   cannot_identify: [e.message], invalid_thresholds: [e.message], target_refreshing: [name], not_found: [name],
   needs_login: [name, where()], migrating: [name], claude_owns: [name], active_account: [name, where()],
   wrong_account: [state.accounts?.find((a) => a.name === name)?.email || name], login_failed: [where(), e.message],
+  login_pending: [name],
 }[e.code] ?? [where()]);
 
 function describe(e, name = '<name>') {
@@ -351,6 +351,8 @@ function draw() {
     $('empty-p').replaceChildren(...tNodes('empty.add', where()));
   }
   renderAccounts();
+  // a login renewed meanwhile, say by signing in on that machine in the tab claude opened, needs no dialog
+  if ($('relog').open && !state.accounts.some((a) => a.name === relog.name && (a.needs_login || a.login_ending))) closeRelog();
   renderHow();
   renderRules();
   if (!state.admin) readOnly();
@@ -482,7 +484,7 @@ function renderAlerts() {
   } else if (login.length > 1) {
     specs.push([null, 'alert.logins', [login.length, login.map((a) => a.name).join(', '), where()], 'alert.skipsAll', null]);
   }
-  const ending = state.accounts.map((a) => [a, loginEnd(a)]).filter(([, end]) => end && end - Date.now() < SOON);
+  const ending = state.accounts.filter((a) => a.login_ending).map((a) => [a, loginEnd(a)]);
   for (const [a, end] of ending.sort((p, q) => p[1] - q[1])) {
     const key = end <= Date.now() ? (a.active ? 'alert.loginEndedClaude' : 'alert.loginEnded')
       : a.active ? 'alert.loginEndsClaude' : 'alert.loginEnds';
@@ -892,12 +894,12 @@ function loginCell(r, a) {
   const endEl = r.el.querySelector('.lg-end'), tokEl = r.el.querySelector('.lg-tok'), now = Date.now();
   endEl.textContent = !end ? '—' : end - now >= 6 * 24 * HOUR ? dateFmt.format(end) : clock(end);
   endEl.title = !end ? (a.needs_login ? '' : t('login.unknown')) : t(end <= now ? 'login.ended' : 'login.until', clock(end));
-  endEl.classList.toggle('soon', Boolean(end) && end - now < SOON);
+  endEl.classList.toggle('soon', Boolean(end) && a.login_ending);
   endEl.classList.toggle('none', !end);
   tokEl.textContent = !tok ? '' : tok <= now ? t('login.expired') : clock(tok);
   tokEl.title = !tok ? '' : `${t(tok <= now ? 'login.tokenExpired' : 'login.tokenUntil', clock(tok))}. ${t(a.active ? 'login.claude' : 'login.auto')}`;
   tokEl.hidden = !tok;
-  r.relog.hidden = a.active || !a.needs_login && !(end && end - now < SOON);
+  r.relog.hidden = a.active || !a.needs_login && !a.login_ending;
   r.relog.setAttribute('aria-label', t('relog.openLabel', a.name));
   r.tok.hidden = a.active || a.needs_login || !r.relog.hidden;
   r.tok.setAttribute('aria-label', r.tok.dataset.title = t('row.refreshToken', a.name));
@@ -1331,14 +1333,19 @@ async function refreshToken(r) {
   render();
 }
 
-const relog = { name: '', from: null, run: 0, stage: '', url: '', expires: null, timer: 0, checking: false, done: false, queue: Promise.resolve() };
+const relog = { name: '', from: null, run: 0, stage: '', id: '', url: '', expires: null, timer: 0, checking: false, done: false, queue: Promise.resolve() };
 
-// loginCall sends login requests one at a time: the daemon cancels by account, so a close's DELETE must not
-// overtake the POST before it or land after the next link's.
+// loginCall sends login requests one at a time, in the order the dialog makes them.
 function loginCall(method, name, tail, body) {
   const p = relog.queue.then(() => api(method, `/v1/accounts/${encodeURIComponent(name)}/login${tail}`, body));
   relog.queue = p.catch(() => {});
   return p;
+}
+
+// dropLink stops the daemon's claude auth login of a link this page got: a link that waits for its code
+// refuses the read key a new one until it runs out.
+function dropLink(name, id) {
+  if (id) loginCall('DELETE', name, `?id=${encodeURIComponent(id)}`).catch(() => {});
 }
 
 // openRelog logs name in again from the page: the daemon runs claude auth login and hands its sign-in link
@@ -1346,7 +1353,7 @@ function loginCall(method, name, tail, body) {
 function openRelog(name, from) {
   const d = $('relog');
   if (d.open || !state.accounts.some((a) => a.name === name)) return;
-  Object.assign(relog, { name, from, done: false });
+  Object.assign(relog, { name, from, id: '', done: false });
   d.querySelector('.relog-h .chip').className = 'chip ' + tagOf(name);
   relogTexts();
   d.showModal();
@@ -1389,9 +1396,12 @@ async function getLink() {
   relogErr('relog-link-err', '');
   $('relog-code').value = '';
   relogStage('wait');
+  dropLink(name, relog.id); // the one before, if its code did not spend it
+  relog.id = '';
   try {
     const l = await loginCall('POST', name, '');
-    if (n !== relog.run) return;
+    if (n !== relog.run) return dropLink(name, l.id);
+    relog.id = l.id;
     relog.url = l.url;
     relog.expires = new Date(l.expires_at);
     $('relog-open').href = l.url;
@@ -1425,12 +1435,11 @@ async function finishRelog(ev) {
   setBusy(submit, true, t('relog.checking'));
   input.readOnly = true;
   try {
-    patchLocal(name, await loginCall('POST', name, '/code', { code }));
+    const a = await loginCall('POST', name, '/code', { id: relog.id, code });
+    if (n === relog.run) relog.done = true; // the code spent the link: nothing to drop
+    patchLocal(name, a);
     render();
-    if (n === relog.run) {
-      relog.done = true;
-      closeRelog();
-    }
+    if (n === relog.run) closeRelog();
   } catch (e) {
     if (n !== relog.run) return;
     if (e.code === 'unauthorized') { closeRelog(); return showAuth(true); }
@@ -1454,7 +1463,7 @@ function closeRelog() {
   if (!d.open) return;
   relog.run++;
   clearTimeout(relog.timer);
-  if (!relog.done) loginCall('DELETE', relog.name, '').catch(() => {});
+  if (!relog.done) dropLink(relog.name, relog.id);
   d.close();
   const r = rows.get(relog.name);
   [relog.from, r?.relog, r?.tok, r?.use].find((el) => el?.isConnected && !el.hidden && el.offsetParent)?.focus();

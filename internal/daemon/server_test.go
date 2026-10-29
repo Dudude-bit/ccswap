@@ -71,16 +71,16 @@ func (f *fakeCore) RefreshLogin(_ context.Context, n string) (api.Account, error
 	f.rec("refresh login " + n)
 	return api.Account{Name: n}, f.err
 }
-func (f *fakeCore) StartLogin(_ context.Context, n string) (api.LoginLink, error) {
-	f.rec("start login " + n)
-	return api.LoginLink{Url: "https://claude.example/oauth/authorize?state=s"}, f.err
+func (f *fakeCore) StartLogin(_ context.Context, n string, replace bool) (api.LoginLink, error) {
+	f.rec(fmt.Sprintf("start login %s replace=%v", n, replace))
+	return api.LoginLink{Id: "L1", Url: "https://claude.example/oauth/authorize?state=s"}, f.err
 }
-func (f *fakeCore) FinishLogin(_ context.Context, n, code string) (api.Account, error) {
-	f.rec("finish login " + n + " " + code)
+func (f *fakeCore) FinishLogin(_ context.Context, n, id, code string) (api.Account, error) {
+	f.rec("finish login " + n + " " + id + " " + code)
 	return api.Account{Name: n}, f.err
 }
-func (f *fakeCore) CancelLogin(_ context.Context, n string) error {
-	f.rec("cancel login " + n)
+func (f *fakeCore) CancelLogin(_ context.Context, n, id string) error {
+	f.rec("cancel login " + n + " " + id)
 	return f.err
 }
 func (f *fakeCore) Activate(_ context.Context, n string, force bool) (api.Status, error) {
@@ -726,12 +726,13 @@ func TestChangesNeedALoopbackHost(t *testing.T) { // DNS rebinding: a foreign na
 }
 
 // TestLoginTakesEitherKeyAnywhere: a new login of an account needs a key, but not the admin key, a
-// loopback listener or a loopback Host: only that account's own sign-in can finish it.
+// loopback listener or a loopback Host: only that account's own sign-in can finish it. Only the admin
+// key, and the unix socket, may replace a link that waits.
 func TestLoginTakesEitherKeyAnywhere(t *testing.T) {
 	logins := []route{
 		{"POST", "/v1/accounts/b/login", ""},
-		{"POST", "/v1/accounts/b/login/code", `{"code":"C1#S1"}`},
-		{"DELETE", "/v1/accounts/b/login", ""},
+		{"POST", "/v1/accounts/b/login/code", `{"id":"L1","code":"C1#S1"}`},
+		{"DELETE", "/v1/accounts/b/login?id=L1", ""},
 	}
 	f := &fakeCore{}
 	off := keys
@@ -754,10 +755,18 @@ func TestLoginTakesEitherKeyAnywhere(t *testing.T) {
 				}
 			}
 		}
-		if want := []string{"start login b", "finish login b C1#S1", "cancel login b"}; !slices.Equal(f.calls, append(want, want...)) {
+		rest := []string{"finish login b L1 C1#S1", "cancel login b L1"}
+		want := slices.Concat([]string{"start login b replace=false"}, rest, []string{"start login b replace=true"}, rest)
+		if !slices.Equal(f.calls, want) {
 			t.Fatalf("calls %v", f.calls)
 		}
 		f.calls = nil
+	}
+	for _, c := range logins {
+		httpDo(t, newApp(f), c.method, c.path, "", c.body)
+	}
+	if want := []string{"start login b replace=true", "finish login b L1 C1#S1", "cancel login b L1"}; !slices.Equal(f.calls, want) {
+		t.Fatalf("unix socket calls %v", f.calls)
 	}
 }
 

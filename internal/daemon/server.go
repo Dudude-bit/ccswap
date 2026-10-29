@@ -45,11 +45,12 @@ type Core interface {
 	Refresh(ctx context.Context) error
 	// RefreshLogin refreshes one account's login in the vault now.
 	RefreshLogin(ctx context.Context, name string) (api.Account, error)
-	// StartLogin runs claude auth login for an account and returns its sign-in link; FinishLogin hands
-	// it the code the sign-in showed and stores the login; CancelLogin drops the link.
-	StartLogin(ctx context.Context, name string) (api.LoginLink, error)
-	FinishLogin(ctx context.Context, name, code string) (api.Account, error)
-	CancelLogin(ctx context.Context, name string) error
+	// StartLogin runs claude auth login for an account and returns its sign-in link, replacing a link that
+	// waits for its code only with replace; FinishLogin hands the link of an id the code the sign-in showed
+	// and stores the login; CancelLogin drops the link of an id.
+	StartLogin(ctx context.Context, name string, replace bool) (api.LoginLink, error)
+	FinishLogin(ctx context.Context, name, id, code string) (api.Account, error)
+	CancelLogin(ctx context.Context, name, id string) error
 	Signal(ctx context.Context, payload map[string]any) error
 	// WebCode mints a one-time code that the TCP listener trades for its admin key; UseWebCode takes
 	// it, once.
@@ -134,18 +135,19 @@ func (s strict) RefreshLogin(ctx context.Context, r api.RefreshLoginRequestObjec
 	return api.RefreshLogin200JSONResponse(a), err
 }
 
+// StartLogin on the unix socket, the owner's, replaces a link that waits for its code.
 func (s strict) StartLogin(ctx context.Context, r api.StartLoginRequestObject) (api.StartLoginResponseObject, error) {
-	l, err := s.c.StartLogin(ctx, r.Name)
+	l, err := s.c.StartLogin(ctx, r.Name, true)
 	return api.StartLogin200JSONResponse(l), err
 }
 
 func (s strict) FinishLogin(ctx context.Context, r api.FinishLoginRequestObject) (api.FinishLoginResponseObject, error) {
-	a, err := s.c.FinishLogin(ctx, r.Name, r.Body.Code)
+	a, err := s.c.FinishLogin(ctx, r.Name, r.Body.Id, r.Body.Code)
 	return api.FinishLogin200JSONResponse(a), err
 }
 
 func (s strict) CancelLogin(ctx context.Context, r api.CancelLoginRequestObject) (api.CancelLoginResponseObject, error) {
-	return api.CancelLogin204Response{}, s.c.CancelLogin(ctx, r.Name)
+	return api.CancelLogin204Response{}, s.c.CancelLogin(ctx, r.Name, r.Params.Id)
 }
 
 func (s strict) Signal(ctx context.Context, r api.SignalRequestObject) (api.SignalResponseObject, error) {
@@ -262,6 +264,8 @@ func classify(err error) (int, api.Error) {
 		return 409, api.Error{Code: "login_gone", Message: err.Error()}
 	case errors.Is(err, ErrWrongAccount):
 		return 409, api.Error{Code: "wrong_account", Message: err.Error()}
+	case errors.Is(err, ErrLoginPending):
+		return 409, api.Error{Code: "login_pending", Message: err.Error()}
 	case errors.Is(err, switcher.ErrNearRefresh):
 		return 409, api.Error{Code: "near_refresh", Message: err.Error()}
 	case errors.Is(err, switcher.ErrTargetRefreshing):
@@ -355,7 +359,9 @@ type httpKeys struct {
 // listener: the read key in T3 Code or another ccswap, and a listener open to the network, only look.
 // A change must also name a loopback host, so a site whose name a DNS rebinding pointed at
 // 127.0.0.1 cannot trade a code or use a key it got. A new login is the exception: the store keeps it
-// only as the account's own email's, so whoever holds a key can at most start one the owner finishes.
+// only as a new login of an account here, with its email, so whoever holds a key can at most start one
+// the owner finishes; only the admin key replaces a link that waits. The admin key marks the request's
+// context with adminCaller.
 func (k httpKeys) gate(a access) fiber.Handler {
 	return func(c fiber.Ctx) error {
 		admin := t3.Carries(c, k.admin)
@@ -367,6 +373,9 @@ func (k httpKeys) gate(a access) fiber.Handler {
 			return c.Status(fiber.StatusForbidden).JSON(api.Error{Code: "local_only", Message: i18n.T("daemon.settings_local_only")})
 		case a == adminKey && !admin:
 			return c.Status(fiber.StatusForbidden).JSON(api.Error{Code: "read_only", Message: i18n.T("daemon.read_only_key")})
+		}
+		if admin {
+			c.SetContext(context.WithValue(c.Context(), adminCaller{}, true))
 		}
 		return c.Next()
 	}
@@ -414,6 +423,9 @@ func (r tcpRouter) Delete(p string, h any, hs ...any) fiber.Router {
 	return r.add(fiber.MethodDelete, p, h, hs)
 }
 
+// adminCaller marks the context of a TCP request with the admin key.
+type adminCaller struct{}
+
 // tcpStrict is the API as the TCP listener serves it: a switch is never forced there, as forcing
 // one may undo the token refresh Claude Code is about to make; admin is the listener's admin key.
 type tcpStrict struct {
@@ -426,6 +438,13 @@ func (s tcpStrict) ActivateAccount(ctx context.Context, r api.ActivateAccountReq
 		return nil, fiber.NewError(fiber.StatusBadRequest, i18n.T("daemon.force_socket_only"))
 	}
 	return s.strict.ActivateAccount(ctx, r)
+}
+
+// StartLogin replaces a link that waits for its code only for the admin key: the read key cannot stop
+// the owner's login, nor have a claude run per request.
+func (s tcpStrict) StartLogin(ctx context.Context, r api.StartLoginRequestObject) (api.StartLoginResponseObject, error) {
+	l, err := s.c.StartLogin(ctx, r.Name, ctx.Value(adminCaller{}) != nil)
+	return api.StartLogin200JSONResponse(l), err
 }
 
 // OpenWebSession trades a code from `ccswap web` for the admin key this listener checks.

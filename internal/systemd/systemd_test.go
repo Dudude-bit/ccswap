@@ -12,7 +12,7 @@ import (
 	"github.com/Dudude-bit/ccswap/internal/i18n"
 )
 
-var envKeys = []string{"CCSWAP_HOME", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "LC_ALL", "LC_MESSAGES", "LANG"}
+var envKeys = []string{"CCSWAP_HOME", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "LC_ALL", "LC_MESSAGES", "LANG", "CCSWAP_CLAUDE_BIN", "PATH"}
 
 func seams(t *testing.T) *[]string {
 	t.Helper()
@@ -57,6 +57,10 @@ WantedBy=default.target
 	g := string(Unit("/b", "/h 50%"))
 	if !strings.Contains(g, "Environment=\"CCSWAP_HOME=/h 50%%\"\nEnvironment=https_proxy=http://p:1\nEnvironment=LANG=ru_RU.UTF-8\n\n[Install]") || strings.Contains(g, "/x y") {
 		t.Fatalf("env:\n%s", g)
+	}
+	t.Setenv("PATH", "/n/bin:/usr/bin") // the claude a login from the page runs, and its node
+	if g := string(Unit("/b", "/h")); !strings.Contains(g, "Environment=PATH=/n/bin:/usr/bin\n\n[Install]") {
+		t.Fatalf("PATH:\n%s", g)
 	}
 }
 

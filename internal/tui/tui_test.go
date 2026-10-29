@@ -270,8 +270,8 @@ func TestLoginEndsAreShown(t *testing.T) {
 	f := fixture()
 	now := time.Now()
 	soon, far, token := now.Add(30*time.Hour), now.Add(20*24*time.Hour), now.Add(5*time.Hour)
-	f.accts[0].LoginExpiresAt, f.accts[0].TokenExpiresAt = &soon, &token // work, in use
-	f.accts[1].LoginExpiresAt, f.accts[1].TokenExpiresAt = &far, &token  // home
+	f.accts[0].LoginExpiresAt, f.accts[0].TokenExpiresAt, f.accts[0].LoginEnding = &soon, &token, true // work, in use
+	f.accts[1].LoginExpiresAt, f.accts[1].TokenExpiresAt = &far, &token                                // home
 	m := loadedAt(t, f, 100)
 	v := text(m)
 	for _, w := range []string{"! " + i18n.T("tui.login_ends", clock(soon, now)), "! " + i18n.T("tui.login_ends_claude", clock(soon, now)),
@@ -289,6 +289,10 @@ func TestLoginEndsAreShown(t *testing.T) {
 	fits(t, v, 100)
 	if v := text(loadedAt(t, f, 64)); !regexp.MustCompile(`work .*!`).MatchString(v) || strings.Contains(v, i18n.T("tui.token_by_claude")) {
 		t.Errorf("a narrow table must mark work, and its panel stay short:\n%s", v)
+	}
+	f.accts[1].LoginExpiresAt = &soon // the daemon tells which logins end, not this clock
+	if m, _ = send(loadedAt(t, f, 100), key("down")); strings.Contains(text(m), i18n.T("tui.login_ends_run", clock(soon, now), "home")) {
+		t.Errorf("home's login is flagged, which the daemon did not:\n%s", text(m))
 	}
 }
 

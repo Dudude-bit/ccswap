@@ -48,9 +48,6 @@ func newPalette(dark bool) palette {
 // wide is the width from which the table has a reset column and the panel the full reset text.
 const wide = 92
 
-// loginSoon is how close to its end a login is flagged: no refresh extends it, a new login must.
-const loginSoon = 72 * time.Hour
-
 // seg is a run of text in one style; a line is built from segments so a selected row can carry its
 // background through every one of them.
 type seg struct {
@@ -158,9 +155,9 @@ func date(t, now time.Time) string {
 	return t.Local().Format("02.01 15:04")
 }
 
-// loginEnds is when a's login ends, if that is close enough to flag.
-func loginEnds(a api.Account, now time.Time) (time.Time, bool) {
-	if a.NeedsLogin || a.LoginExpiresAt == nil || a.LoginExpiresAt.Sub(now) > loginSoon {
+// loginEnds is when a's login ends, if the daemon flags it as ending: no refresh extends it, a new login must.
+func loginEnds(a api.Account) (time.Time, bool) {
+	if a.NeedsLogin || !a.LoginEnding || a.LoginExpiresAt == nil {
 		return time.Time{}, false
 	}
 	return *a.LoginExpiresAt, true
@@ -399,7 +396,7 @@ func (m *Model) state(a api.Account, now time.Time, dim bool) []seg {
 	case !a.Enabled:
 		return []seg{{i18n.T("tui.disabled"), p.dim}}
 	}
-	if end, ok := loginEnds(a, now); ok {
+	if end, ok := loginEnds(a); ok {
 		return []seg{{"! " + i18n.T("tui.login_ends", clock(end, now)), st(p.warn)}}
 	}
 	switch {
@@ -418,9 +415,8 @@ func (m *Model) state(a api.Account, now time.Time, dim bool) []seg {
 }
 
 // glyph marks an account's state where a narrow table has no room for the words; the panel says them.
-func (m *Model) glyph(a api.Account, now time.Time) seg {
+func (m *Model) glyph(a api.Account) seg {
 	p := m.pal
-	_, ending := loginEnds(a, now)
 	switch {
 	case a.NeedsLogin || a.Exhausted:
 		return seg{"✕", p.crit}
@@ -428,7 +424,7 @@ func (m *Model) glyph(a api.Account, now time.Time) seg {
 		return seg{"!", p.warn}
 	case !a.Enabled:
 		return seg{"○", p.dim}
-	case ending:
+	case a.LoginEnding:
 		return seg{"!", p.warn}
 	}
 	return seg{" ", p.plain}
@@ -479,7 +475,7 @@ func (m *Model) table(w int, narrow bool, now time.Time) []string {
 			segs = append(append(segs, m.bar(wd.w, bw, fill)...), seg{" ", p.plain}, seg{pctText(wd.w), pct}, seg{"  ", p.plain})
 		}
 		if narrow {
-			segs = append(segs, m.glyph(a, now))
+			segs = append(segs, m.glyph(a))
 		} else {
 			segs = append(segs, m.state(a, now, m.down)...)
 		}
@@ -523,7 +519,7 @@ func (m *Model) detail(w int, narrow bool, a api.Account, now time.Time) []strin
 	if a.Error != nil {
 		lines = append(lines, row{segs: []seg{{"! " + *a.Error, p.warn}}})
 	}
-	if end, ok := loginEnds(a, now); ok && a.Active {
+	if end, ok := loginEnds(a); ok && a.Active {
 		lines = append(lines, row{segs: []seg{{"! " + i18n.T("tui.login_ends_claude", clock(end, now)), p.warn}}})
 	} else if ok {
 		lines = append(lines, row{segs: []seg{{"! " + i18n.T("tui.login_ends_run", clock(end, now), a.Name), p.warn}}})
