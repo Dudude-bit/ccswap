@@ -867,7 +867,7 @@ function makeRow(name) {
     pending: { prio: false, enabled: false, use: false },
     prioTimer: 0,
   };
-  for (const b of el.querySelectorAll('.step')) {
+  for (const b of el.querySelectorAll('[data-step]')) {
     b.addEventListener('click', () => {
       const cur = parseInt(r.prio.value, 10);
       r.prio.value = String((Number.isNaN(cur) ? r.account.priority : cur) + Number(b.dataset.step));
