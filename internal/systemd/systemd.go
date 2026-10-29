@@ -132,11 +132,12 @@ func (s service) unit() []byte {
 	return b.Bytes()
 }
 
-// words are the systemd words of v, unquoted; % and $ stay doubled.
+// words are the systemd words of v, unquoted: a word may be quoted whole in " or '; % and $ stay doubled.
 func words(v string) []string {
 	var out []string
 	for v = strings.TrimLeft(v, " \t"); v != ""; v = strings.TrimLeft(v, " \t") {
-		if v[0] != '"' {
+		q := v[0]
+		if q != '"' && q != '\'' {
 			i := strings.IndexAny(v, " \t")
 			if i < 0 {
 				i = len(v)
@@ -146,7 +147,7 @@ func words(v string) []string {
 		}
 		var w strings.Builder
 		i := 1
-		for ; i < len(v) && v[i] != '"'; i++ {
+		for ; i < len(v) && v[i] != q; i++ {
 			if v[i] == '\\' && i+1 < len(v) {
 				i++
 			}
