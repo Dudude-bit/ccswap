@@ -67,6 +67,22 @@ func (f *fakeCore) Patch(_ context.Context, n string, p api.AccountPatch) (api.A
 	return api.Account{Name: n}, f.err
 }
 func (f *fakeCore) Remove(_ context.Context, n string) error { f.rec("remove " + n); return f.err }
+func (f *fakeCore) RefreshLogin(_ context.Context, n string) (api.Account, error) {
+	f.rec("refresh login " + n)
+	return api.Account{Name: n}, f.err
+}
+func (f *fakeCore) StartLogin(_ context.Context, n string, replace bool) (api.LoginLink, error) {
+	f.rec(fmt.Sprintf("start login %s replace=%v", n, replace))
+	return api.LoginLink{Id: "L1", Url: "https://claude.example/oauth/authorize?state=s"}, f.err
+}
+func (f *fakeCore) FinishLogin(_ context.Context, n, id, code string) (api.Account, error) {
+	f.rec("finish login " + n + " " + id + " " + code)
+	return api.Account{Name: n}, f.err
+}
+func (f *fakeCore) CancelLogin(_ context.Context, n, id string) error {
+	f.rec("cancel login " + n + " " + id)
+	return f.err
+}
 func (f *fakeCore) Activate(_ context.Context, n string, force bool) (api.Status, error) {
 	f.rec("activate " + n)
 	f.force = force
@@ -276,6 +292,9 @@ func TestErrorMapping(t *testing.T) {
 		{store.ErrDuplicate, 409, "duplicate"},
 		{ErrRemoveActive, 409, "remove_active"},
 		{ErrActiveAccount, 409, "active_account"},
+		{ErrClaudeOwns, 409, "claude_owns"},
+		{ErrRefreshFailed, 502, "refresh_failed"},
+		{i18n.Err("daemon.login_gone", switcher.ErrNeedsLogin, "b"), 409, "needs_login"},
 		{ErrLoginIncomplete, 400, "login_incomplete"},
 		{ErrInvalidName, 400, "invalid_name"},
 		{fmt.Errorf("%w: x", ErrInvalidThresholds), 400, "invalid_thresholds"},
@@ -549,6 +568,7 @@ var (
 	adminRoutes = []route{
 		{"PATCH", "/v1/accounts/a", `{"priority":3}`},
 		{"POST", "/v1/accounts/a/activate", ""},
+		{"POST", "/v1/accounts/a/refresh", ""},
 		{"PUT", "/v1/auto", `{"enabled":true}`},
 		{"PUT", "/v1/strategy", `{"strategy":"cache-aware"}`},
 		{"PUT", "/v1/thresholds", `{"five_hour":90,"seven_day":97,"hysteresis":5,"min_dwell_seconds":60}`},
@@ -725,6 +745,51 @@ func TestChangesNeedALoopbackHost(t *testing.T) { // DNS rebinding: a foreign na
 		if r := httpDoHost(t, app, host, "POST", "/v1/refresh", keys.admin, ""); r.StatusCode != 204 {
 			t.Errorf("Host %q: %d", host, r.StatusCode)
 		}
+	}
+}
+
+// TestLoginTakesEitherKeyAnywhere: a new login of an account needs a key, but not the admin key, a
+// loopback listener or a loopback Host: only that account's own sign-in can finish it. Only the admin
+// key, and the unix socket, may replace a link that waits.
+func TestLoginTakesEitherKeyAnywhere(t *testing.T) {
+	logins := []route{
+		{"POST", "/v1/accounts/b/login", ""},
+		{"POST", "/v1/accounts/b/login/code", `{"id":"L1","code":"C1#S1"}`},
+		{"DELETE", "/v1/accounts/b/login?id=L1", ""},
+	}
+	f := &fakeCore{}
+	off := keys
+	off.local = false
+	for _, app := range []*fiber.App{newHTTPApp(f, fakeHub{}, keys), newHTTPApp(f, fakeHub{}, off)} {
+		for _, key := range []string{"", "wrong"} {
+			for _, c := range logins {
+				if r := httpDo(t, app, c.method, c.path, key, c.body); r.StatusCode != 401 {
+					t.Errorf("key %q, %s %s: %d", key, c.method, c.path, r.StatusCode)
+				}
+			}
+		}
+		if len(f.calls) != 0 {
+			t.Fatalf("unauthorized logins reached the core: %v", f.calls)
+		}
+		for _, key := range []string{keys.read, keys.admin} {
+			for _, c := range logins {
+				if r := httpDoHost(t, app, "ccswap.example.com", c.method, c.path, key, c.body); r.StatusCode/100 != 2 {
+					t.Errorf("key %q, %s %s under another Host: %d", key, c.method, c.path, r.StatusCode)
+				}
+			}
+		}
+		rest := []string{"finish login b L1 C1#S1", "cancel login b L1"}
+		want := slices.Concat([]string{"start login b replace=false"}, rest, []string{"start login b replace=true"}, rest)
+		if !slices.Equal(f.calls, want) {
+			t.Fatalf("calls %v", f.calls)
+		}
+		f.calls = nil
+	}
+	for _, c := range logins {
+		httpDo(t, newApp(f), c.method, c.path, "", c.body)
+	}
+	if want := []string{"start login b replace=true", "finish login b L1 C1#S1", "cancel login b L1"}; !slices.Equal(f.calls, want) {
+		t.Fatalf("unix socket calls %v", f.calls)
 	}
 }
 

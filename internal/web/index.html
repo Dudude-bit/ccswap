@@ -177,6 +177,7 @@
               <th scope="col" data-t="col.week"></th>
               <th scope="col" class="c-models" data-t="col.models"></th>
               <th scope="col" data-t="col.next"></th>
+              <th scope="col" data-t="col.login" data-t-title="col.loginTitle"></th>
               <th scope="col" data-t="col.prio"></th>
               <th scope="col" class="admin" data-t="col.auto" data-t-title="col.autoTitle"></th>
               <th scope="col" class="admin"><span class="sr-only" data-t="col.switch"></span></th>
@@ -247,6 +248,35 @@
   </main>
 </div>
 
+<dialog id="relog" class="relog-box" aria-labelledby="relog-h" aria-describedby="relog-sub">
+  <form id="relog-form" class="relog-card" novalidate>
+    <h2 id="relog-h" class="relog-h"><span class="chip" aria-hidden="true"></span><span id="relog-title"></span></h2>
+    <p id="relog-sub" class="relog-sub"></p>
+    <ol class="relog-steps">
+      <li>
+        <p class="relog-label" data-t="relog.step1"></p>
+        <div class="relog-link">
+          <a id="relog-open" class="btn" target="_blank" rel="noopener noreferrer" hidden><span data-t="relog.link"></span><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></a>
+          <button type="button" id="relog-copy" class="btn btn-quiet" hidden data-t="relog.copyLink"></button>
+          <button type="button" id="relog-again" class="btn" hidden data-t="relog.again"></button>
+          <p id="relog-wait" class="relog-wait" role="status"><span class="spin" aria-hidden="true"></span><span data-t="relog.wait"></span></p>
+        </div>
+        <p id="relog-link-err" class="field-err" role="alert" hidden></p>
+      </li>
+      <li class="field">
+        <label for="relog-code" class="relog-label" data-t="relog.step2"></label>
+        <input id="relog-code" class="input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="relog-err relog-hint">
+        <p id="relog-err" class="field-err" role="alert" hidden></p>
+        <p id="relog-hint" class="hint"></p>
+      </li>
+    </ol>
+    <div class="relog-actions">
+      <button type="submit" id="relog-submit" class="btn btn-primary"><span class="spin" aria-hidden="true"></span><span class="label" data-t="relog.submit"></span></button>
+      <button type="button" id="relog-cancel" class="btn btn-quiet" data-t="relog.cancel"></button>
+    </div>
+  </form>
+</dialog>
+
 <template id="acct-tpl">
   <tbody class="acct">
     <tr class="row">
@@ -256,6 +286,13 @@
       <td class="c-use" data-col="col.week"></td>
       <td class="c-models" data-col="col.models"></td>
       <td class="c-next" data-col="col.next"></td>
+      <td class="c-login" data-col="col.login">
+        <span class="login-line">
+          <span class="lg"><span class="lg-end"></span><span class="lg-tok"></span></span>
+          <button type="button" class="btn relog relog-go" data-t="relog.open"></button>
+          <button type="button" class="step tok admin"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg></button>
+        </span>
+      </td>
       <td class="c-prio" data-col="col.prio">
         <span class="stepper">
           <button type="button" class="step admin" data-step="-1"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg></button>
@@ -266,7 +303,7 @@
       <td class="c-auto admin" data-col="col.auto"><input type="checkbox" class="switch enabled" role="switch"></td>
       <td class="c-act admin"><button type="button" class="btn use"><span class="spin" aria-hidden="true"></span><span class="label"></span></button><span class="cur" data-t="row.inUse" hidden></span></td>
     </tr>
-    <tr class="row-msg" hidden><td colspan="9"><p class="row-note" hidden></p><div class="strip msg" role="alert" hidden></div></td></tr>
+    <tr class="row-msg" hidden><td colspan="10"><p class="row-note" hidden></p><div class="strip msg" role="alert" hidden></div></td></tr>
   </tbody>
 </template>
 </body>

@@ -59,11 +59,12 @@ var ours = []string{"Label", "ProgramArguments", "RunAtLoad", "KeepAlive", "Stan
 func Plist(binPath, home string) []byte {
 	j := job{bin: binPath, log: filepath.Join(home, "daemon.log")}
 	// launchd gives no shell env: keep the proxy claude reaches Anthropic through (net/http reads these),
-	// and the locale, which picks the language of notifications
+	// the locale, which picks the language of notifications, and CCSWAP_CLAUDE_BIN and PATH (launchd's is
+	// /usr/bin:/bin), where a login from the page finds claude and the node an npm-installed claude runs on
 	if os.Getenv("CCSWAP_HOME") != "" { // Home is absolute (a relative CCSWAP_HOME is refused), as launchd runs the job from /
 		j.env = append(j.env, [2]string{"CCSWAP_HOME", home})
 	}
-	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "LC_ALL", "LC_MESSAGES", "LANG"} {
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "LC_ALL", "LC_MESSAGES", "LANG", "CCSWAP_CLAUDE_BIN", "PATH"} {
 		if v := os.Getenv(k); v != "" {
 			j.env = append(j.env, [2]string{k, v})
 		}

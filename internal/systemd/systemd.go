@@ -111,8 +111,9 @@ var ours = []string{"Description", "ExecStart", "Restart", "RestartPreventExitSt
 // Unit pins CCSWAP_HOME: the user manager's XDG_CONFIG_HOME may differ from the installing shell's.
 func Unit(binPath, home string) []byte {
 	s := service{bin: binPath, desc: i18n.T("systemd.unit_description"), log: filepath.Join(home, "daemon.log"), env: []string{"CCSWAP_HOME=" + home}}
-	// the locale picks the language of the daemon's messages
-	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "LC_ALL", "LC_MESSAGES", "LANG"} {
+	// the locale picks the language of the daemon's messages; CCSWAP_CLAUDE_BIN and PATH (the user manager's
+	// has no ~/.local/bin), where a login from the page finds claude and the node an npm-installed claude runs on
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "LC_ALL", "LC_MESSAGES", "LANG", "CCSWAP_CLAUDE_BIN", "PATH"} {
 		if v := os.Getenv(k); v != "" {
 			s.env = append(s.env, k+"="+v)
 		}

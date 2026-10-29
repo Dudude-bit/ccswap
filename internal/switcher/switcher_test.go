@@ -323,13 +323,13 @@ func TestIdentifyFingerprintSkipsProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := e.prof.calls
-	name, known, err := e.sw.Identify(context.Background())
+	name, known, _, err := e.sw.Identify(context.Background())
 	if err != nil || !known || name != "b" || e.prof.calls != before {
 		t.Fatal(name, known, err, e.prof.calls, before)
 	}
 	// a refreshed token no longer matches: profile is consulted.
 	e.kc.Set(svc, kacc, credJSON("atB", "rB-new", now.Add(time.Hour)))
-	name, known, err = e.sw.Identify(context.Background())
+	name, known, _, err = e.sw.Identify(context.Background())
 	if err != nil || !known || name != "b" || e.prof.calls != before+1 {
 		t.Fatal(name, known, err, e.prof.calls)
 	}
@@ -428,7 +428,7 @@ func TestFingerprintBoundToAccountNotActive(t *testing.T) {
 		t.Fatal("setup of failure scenario wrong")
 	}
 	before := e.prof.calls
-	if name, known, err := e.sw.Identify(context.Background()); err != nil || !known || name != "b" || e.prof.calls != before {
+	if name, known, _, err := e.sw.Identify(context.Background()); err != nil || !known || name != "b" || e.prof.calls != before {
 		t.Fatal(name, known, err)
 	}
 	os.Chmod(e.home, 0o700)
@@ -620,7 +620,7 @@ func TestForcedNoopDoesNotBindFingerprint(t *testing.T) {
 	e.prof.err = nil
 	e.prof.byAT["atS"] = "stranger@x"
 	before := e.prof.calls
-	if name, known, err := e.sw.Identify(context.Background()); err != nil || known || name != "" || e.prof.calls != before+1 {
+	if name, known, _, err := e.sw.Identify(context.Background()); err != nil || known || name != "" || e.prof.calls != before+1 {
 		t.Fatal(name, known, err, e.prof.calls)
 	}
 	if _, err := e.sw.Switch(context.Background(), "b", false); !errors.Is(err, ErrUnknownActive) {
@@ -707,16 +707,16 @@ func TestWarningsAreLocalized(t *testing.T) {
 
 func TestIdentifyRemembersProfileMatchOnly(t *testing.T) {
 	e := setup(t, time.Hour)
-	if n, known, err := e.sw.Identify(context.Background()); err != nil || !known || n != "a" {
+	if n, known, _, err := e.sw.Identify(context.Background()); err != nil || !known || n != "a" {
 		t.Fatal(n, known, err)
 	}
 	e.prof.err = errors.New("401: access token expired") // Claude Code idle, entry unchanged
-	if n, known, err := e.sw.Identify(context.Background()); err != nil || !known || n != "a" {
+	if n, known, _, err := e.sw.Identify(context.Background()); err != nil || !known || n != "a" {
 		t.Fatal("a positive identification must be remembered by fingerprint:", n, known, err)
 	}
 	// a rotated entry is a new chain: the profile is asked again
 	e.kc.Set(svc, kacc, credJSON("atA2", "rA2", now.Add(time.Hour)))
-	if _, _, err := e.sw.Identify(context.Background()); !errors.Is(err, ErrCannotIdentify) {
+	if _, _, _, err := e.sw.Identify(context.Background()); !errors.Is(err, ErrCannotIdentify) {
 		t.Fatal(err)
 	}
 	// a forced fallback is no identification and is not remembered
@@ -725,7 +725,7 @@ func TestIdentifyRemembersProfileMatchOnly(t *testing.T) {
 	if _, err := f.sw.Switch(context.Background(), "a", true); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.sw.Identify(context.Background()); !errors.Is(err, ErrCannotIdentify) {
+	if _, _, _, err := f.sw.Identify(context.Background()); !errors.Is(err, ErrCannotIdentify) {
 		t.Fatal("force fallback remembered:", err)
 	}
 }
@@ -741,7 +741,7 @@ func TestFingerprintSurvivesRestart(t *testing.T) {
 	}
 	sw := New(Deps{KC: e.kc, Store: e.st, Profiles: e.prof, Service: svc, KCAccount: kacc, ClaudeJSON: e.cj, Now: func() time.Time { return now }})
 	e.prof.err = errors.New("401: access token expired")
-	if name, known, err := sw.Identify(context.Background()); err != nil || !known || name != "b" {
+	if name, known, _, err := sw.Identify(context.Background()); err != nil || !known || name != "b" {
 		t.Fatal("a restarted daemon must still know the idle entry:", name, known, err)
 	}
 }
@@ -754,7 +754,7 @@ func TestFingerprintNeedsSameEmail(t *testing.T) {
 	// b removed and added again with a different login
 	e.st.Update(func(s *store.State) error { s.Accounts[1].Email = "other@x"; return nil })
 	before := e.prof.calls
-	if name, known, err := e.sw.Identify(context.Background()); err != nil || known || name != "" || e.prof.calls != before+1 {
+	if name, known, _, err := e.sw.Identify(context.Background()); err != nil || known || name != "" || e.prof.calls != before+1 {
 		t.Fatal("fingerprint must not name an account whose email changed:", name, known, err)
 	}
 }
@@ -782,7 +782,7 @@ func TestForgetLockedClearsFingerprint(t *testing.T) {
 func TestExpiredEntry(t *testing.T) {
 	e := setup(t, -time.Minute) // Claude Code idle: its access token expired, nothing refreshed it
 	e.prof.err = errors.New("401")
-	if _, _, err := e.sw.Identify(context.Background()); !errors.Is(err, ErrEntryExpired) || !errors.Is(err, ErrCannotIdentify) {
+	if _, _, _, err := e.sw.Identify(context.Background()); !errors.Is(err, ErrEntryExpired) || !errors.Is(err, ErrCannotIdentify) {
 		t.Fatal(err)
 	}
 	if _, err := e.sw.Switch(context.Background(), "b", false); !errors.Is(err, ErrEntryExpired) {
@@ -795,7 +795,7 @@ func TestExpiredEntry(t *testing.T) {
 	}
 	// identified by fingerprint, but the guard sees an expiry already in the past
 	g := setup(t, time.Hour)
-	if _, _, err := g.sw.Identify(context.Background()); err != nil {
+	if _, _, _, err := g.sw.Identify(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	g.kc.Set(svc, kacc, credJSON("atA", "rA", now.Add(-time.Minute)))
@@ -814,7 +814,7 @@ func TestAdoptRemembersFingerprint(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.prof.err = errors.New("401")
-	if name, known, err := e.sw.Identify(context.Background()); err != nil || !known || name != "work" {
+	if name, known, _, err := e.sw.Identify(context.Background()); err != nil || !known || name != "work" {
 		t.Fatal(name, known, err)
 	}
 }
@@ -857,11 +857,11 @@ func TestEntryWithoutLoginKeepsOtherKeys(t *testing.T) {
 		if json.Unmarshal(raw, &top) != nil || e.entry(t).OAuth.RefreshToken != "rB" || string(top["mcpOAuth"]) != string(old["mcpOAuth"]) {
 			t.Fatalf("%s -> %s", entry, raw)
 		}
-		if _, _, err := e.sw.Identify(context.Background()); err != nil {
+		if _, _, _, err := e.sw.Identify(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		e.kc.Set(svc, kacc, []byte(entry))
-		if _, _, err := e.sw.Identify(context.Background()); !errors.Is(err, keychain.ErrNotFound) {
+		if _, _, _, err := e.sw.Identify(context.Background()); !errors.Is(err, keychain.ErrNotFound) {
 			t.Fatalf("no login must read as a missing entry: %v", err)
 		}
 	}

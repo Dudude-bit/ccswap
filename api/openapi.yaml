@@ -5,7 +5,9 @@ info:
   description: |
     Local API of the ccswap daemon, served over a unix socket. The TCP listener of T3 Code and the web page serves
     part of it (tcpRoutes in internal/daemon/server.go): reads to the read key or the admin key, changes to the admin
-    key and only on a loopback address, and never a forced switch. The page's texts (/v1/i18n/{lang}) need no key.
+    key and only on a loopback address, and never a forced switch. A new login of an account takes the read key on any
+    address, but only the admin key replaces a link that waits for its code. The page's texts (/v1/i18n/{lang}) need
+    no key.
 servers:
   - url: http://ccswap
 paths:
@@ -80,6 +82,72 @@ paths:
         "404": {$ref: "#/components/responses/Error"}
         "409": {$ref: "#/components/responses/Error"}
         "500": {$ref: "#/components/responses/Error"}
+  /v1/accounts/{name}/refresh:
+    parameters:
+      - {name: name, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: refreshLogin
+      description: >-
+        Refresh the account's login now, as the daemon does 10 minutes before its access token runs out: a new access
+        token, which also proves the login still works. It does not move login_expires_at. Never the login Claude Code
+        uses (claude_owns), which Claude Code refreshes itself. An account refreshed under a minute ago is not asked
+        again.
+      responses:
+        "200": {description: The account after the refresh, content: {application/json: {schema: {$ref: "#/components/schemas/Account"}}}}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/accounts/{name}/login:
+    parameters:
+      - {name: name, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: startLogin
+      description: >-
+        Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the
+        sign-in link it prints and the link's id. Signing in there shows a code, which /v1/accounts/{name}/login/code
+        takes with the id. Signing in on the daemon's machine, in the browser tab claude opens, finishes the login
+        without a code. One link per account: while one waits for its code, a new one is refused (login_pending), except
+        on the unix socket and to the admin key, whose new link replaces it once it is up. Without those, a start
+        under 30 seconds after the account's last one is refused too (429 login_cooldown), as each runs a claude that
+        may open a browser tab on the daemon's machine. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews.
+        The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the
+        login, and only as a new login of an account here.
+      responses:
+        "200": {description: The sign-in link, content: {application/json: {schema: {$ref: "#/components/schemas/LoginLink"}}}}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+    delete:
+      operationId: cancelLogin
+      description: Drop the account's sign-in link of this id and stop its claude auth login, if there is one.
+      parameters:
+        - {name: id, in: query, required: true, schema: {type: string}, description: The id the link came with}
+      responses:
+        "204": {description: No link is left}
+        "500": {$ref: "#/components/responses/Error"}
+  /v1/accounts/{name}/login/code:
+    parameters:
+      - {name: name, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: finishLogin
+      description: >-
+        Hand claude auth login of the link with this id the code its sign-in showed (CODE#STATE, or the callback URL)
+        and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is
+        gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email
+        (wrong_account), and the account must still be here (not_found): this never adds an account.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/LoginCode"}}}
+      responses:
+        "200": {description: The account with its new login, content: {application/json: {schema: {$ref: "#/components/schemas/Account"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
   /v1/auto:
     put:
       operationId: setAuto
@@ -308,20 +376,25 @@ components:
           type: string
           description: |
             Every code, by status; notes in parentheses (the page's test reads the codes from this list).
-            400 bad_request (malformed request), invalid_name, invalid_thresholds, invalid_strategy, invalid_lang, invalid_remote, invalid_config_dir (import: not a login dir in the ccswap home), login_incomplete,
+            400 bad_request (malformed request, also an empty login code), invalid_name, invalid_thresholds, invalid_strategy, invalid_lang, invalid_remote, invalid_config_dir (import: not a login dir in the ccswap home), login_incomplete,
             not_bundle (migrate import: not a ccswap bundle), bundle_version (migrate import: made by a newer ccswap),
-            invalid_code (migrate import: the code is malformed), bad_bundle (migrate import: a wrong code or a damaged bundle);
+            invalid_code (migrate import: the code is malformed), bad_bundle (migrate import: a wrong code or a damaged bundle),
+            code_refused (login: claude got no login for the code; the link is spent);
             401 unauthorized (TCP listener only: no key or a wrong one);
             403 bad_code (web session: the code is wrong, used or expired), read_only (TCP listener only: the read key on a change),
             local_only (TCP listener only: a change or a web session on a listener that is not on a loopback address, or under a Host
             that names no loopback address or localhost);
-            404 not_found (also an unknown language of /v1/i18n), no_entry (adopt: Claude Code has no login);
+            404 not_found (also an unknown language of /v1/i18n, and a login code of an account removed meanwhile), no_entry (adopt: Claude Code has no login);
             409 duplicate (also migrate import: an email here already without replace, or a name here with another email),
             remove_active, active_account (import: re-login the active account in claude),
+            claude_owns (refresh login: the login is the one Claude Code uses, and Claude Code refreshes it itself),
             near_refresh, entry_changed (Claude Code kept rewriting its login during the switch), entry_expired (Claude Code's access token expired: it has not run for a while),
             target_refreshing (the target login has no access token yet: the daemon is refreshing it),
             unknown_active, cannot_identify, needs_login,
             migrating (the account is being moved to another machine: an export holds it),
+            login_gone (login code: no link of the account with this id waits for a code, as none was started, or it expired,
+            was used, was replaced or the daemon restarted), wrong_account (login code: the sign-in was another account's; the link is spent),
+            login_pending (login: another link of the account waits for its code, until it is used or its 10 minutes run out),
             migrate_active (migrate: the account, or its login, is the one Claude Code uses), export_gone (migrate: no such
             export: cancelled, expired, or forgotten by a daemon restart, possibly after its commit landed, so check
             whether the accounts are still here), export_done (migrate cancel: the export is committed already),
@@ -329,9 +402,13 @@ components:
             bundle_spent (migrate import with replace: the bundle's login was used already; nothing is imported),
             no_update (update: no release is newer than this build, or this build has no version to compare),
             updating (update, restart: one is running already, or is done and the daemon is restarting);
+            429 login_cooldown (login: a start that cannot replace a link, under 30 seconds after the account's last one;
+            the message says when one is taken again);
             500 internal;
             502 bundle_unchecked (migrate import with replace: the bundle's login was not refreshed, as Anthropic failed or
-            no time was left; nothing is imported, try again),
+            no time was left; nothing is imported, try again), refresh_failed (refresh login: Anthropic did not answer or
+            refused for another reason than a spent login; the daemon tries again on its next tick),
+            login_failed (login: claude auth login did not start, gave no link or did not answer the code in time),
             update_failed (update: GitHub failed, the download did not match its checksum, the new binary did not run, or
             the old one could not be replaced; nothing changed).
         message: {type: string, description: A detail; clients show their own text per code}
@@ -419,7 +496,7 @@ components:
         resets_at: {type: string, format: date-time}
     Account:
       type: object
-      required: [name, email, priority, enabled, needs_login, active, exhausted, models]
+      required: [name, email, priority, enabled, needs_login, active, exhausted, login_ending, models]
       properties:
         name: {type: string}
         email: {type: string}
@@ -432,6 +509,20 @@ components:
         free_at: {type: string, format: date-time, description: "Exhausted accounts only: when auto-switch counts the account free again, the latest reset of the windows at their thresholds or the end of a limit hit, whichever is later; absent when a blocking window's reset is unknown"}
         checked_at: {type: string, format: date-time}
         error: {type: string}
+        token_expires_at:
+          type: string
+          format: date-time
+          description: >-
+            When the login's access token runs out: for the account in Claude Code, the token Claude Code holds and
+            refreshes; for the others, ccswap's copy, which the daemon refreshes 10 minutes before. Absent while it
+            needs a login or the daemon has not read it yet.
+        login_expires_at:
+          type: string
+          format: date-time
+          description: >-
+            When the login itself ends, as Anthropic said at its last refresh: a refresh does not move it, a new login
+            does. Absent when unknown or while it needs a login.
+        login_ending: {type: boolean, description: "The login ends within 72 hours or has ended, and wants a new login: the daemon then announces it, and clients flag it"}
         leaves_at: {type: string, format: date-time, description: "Account in use only: when it reaches the five-hour, weekly or a per-model weekly threshold at its pace in use over the last hour, whichever comes first; absent when the pace is unknown or flat, or the window resets first"}
         five_hour: {$ref: "#/components/schemas/Window"}
         seven_day: {$ref: "#/components/schemas/Window"}
@@ -539,6 +630,19 @@ components:
       required: [key]
       properties:
         key: {type: string, description: The admin key; the page keeps it for its tab only}
+    LoginLink:
+      type: object
+      required: [id, url, expires_at]
+      properties:
+        id: {type: string, description: "The link's id: only it finishes or cancels this link"}
+        url: {type: string, description: The sign-in page claude auth login printed}
+        expires_at: {type: string, format: date-time, description: The link is dropped then if no code came}
+    LoginCode:
+      type: object
+      required: [id, code]
+      properties:
+        id: {type: string, description: The id the link came with}
+        code: {type: string, description: "The code the sign-in showed, CODE#STATE, or the callback URL that carries it"}
     MigrateExportRequest:
       type: object
       required: [names]

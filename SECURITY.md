@@ -44,11 +44,12 @@ On Linux there is no keychain: the same items are 0600 files in `vault/` (a 0700
 ccswap's folder. Do not keep ccswap's folder in git or a dotfiles repository: on Linux it holds your
 refresh tokens, and a copy used on another machine spoils the original's login.
 
-During `ccswap login` the new login waits in a temporary `login-*` folder (0700) inside ccswap's folder
-until the daemon takes it into the vault: on Linux in `login-*/.credentials.json` (0600), on macOS in a
-keychain item `Claude Code-credentials-<hash>`, which Claude Code names after that folder. ccswap removes
-both when the login ends. After a killed `ccswap login`, the next `ccswap login` removes the ones older
-than an hour.
+During `ccswap login` or a login from the page the new login waits in a temporary `login-*` folder
+(0700) inside ccswap's folder until the daemon takes it into the vault: on Linux in
+`login-*/.credentials.json` (0600), on macOS in a keychain item `Claude Code-credentials-<hash>`, which
+Claude Code names after that folder. ccswap removes both when the login ends. Those a killed `ccswap
+login` or daemon left are removed, once older than an hour, by the next `ccswap login` and at the
+daemon's start.
 
 The daemon's service file is 0600, because it copies the proxy variables (`HTTPS_PROXY` and the like,
 which may hold credentials) from your environment: the LaunchAgent
@@ -99,8 +100,19 @@ GitHub, over HTTPS:
   the hook. Only your user can reach it.
 - **TCP listener** (`[t3] listen`, `127.0.0.1:8318` by default; `[t3] enabled = false` turns it off):
   part of the API, for T3 Code, the web page and another ccswap.
-  - The **read key** (the one `ccswap t3` prints) changes nothing. It reads the accounts' names,
+  - The **read key** (the one `ccswap t3` prints) changes no setting. It reads the accounts' names,
     emails, limits and status, and lets T3 Code ask for an account's usage; it never reveals a token.
+  - Either key, on any listener and `Host`, renews the login of an account that is already here: the
+    daemon runs `claude auth login`, hands out its sign-in link with an id, and takes the code back with
+    that id. That login is kept only as a new login of an account here with its own email, never as a new
+    account, and the sign-in's PKCE verifier never leaves the daemon's claude, so a key holder can start
+    such a login and cancel the one it started, but only the account's owner can finish it, and an
+    intercepted code works nowhere else. While a link waits for its code, the read key gets no other one
+    for that account (one `claude` at a time), and without that link's id it cannot cancel or finish it;
+    only the admin key replaces it. The
+    read key also starts at most one login per account every 30 seconds (`429 login_cooldown`), as each
+    runs a `claude` that may open a browser tab on your machine.
+    Adding an account stays on the socket.
     The page's texts (`GET /v1/i18n/<tag>`) need no key: they hold nothing secret.
   - The **admin key** changes settings: priorities, enabling and disabling accounts for auto-switch,
     auto-switch itself, the strategy, thresholds, a manual switch, checking limits now and installing
@@ -111,9 +123,9 @@ GitHub, over HTTPS:
   - A change is taken only when the listener is on a loopback address and the request's `Host` names
     one (`127.0.0.1`, `[::1]` or `localhost`), so a site that rebinds its name to 127.0.0.1 gets
     nothing. A listener on any other address only reads, even with the admin key.
-  - Everything else is served on the socket only: a forced switch, adding, signing in and removing
-    accounts, the hook signal, the language, the web codes, `remote`, `migrate` and the restart
-    `ccswap update` asks for, among others.
+  - Everything else is served on the socket only: a forced switch, adding and removing accounts, the
+    hook signal, the language, the web codes, `remote`, `migrate` and the restart `ccswap update` asks
+    for, among others.
   - The listener speaks plain HTTP. Outside a network you trust, keep it on loopback and use an SSH
     tunnel.
 - **Replacing a key.** Both keys last until you replace them. If one leaks, delete it from the vault

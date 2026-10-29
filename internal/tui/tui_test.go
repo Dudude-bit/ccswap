@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,7 @@ type fake struct {
 	enabled  map[string]bool
 	strategy api.Strategy
 	editErr  error
+	tokens   []string
 }
 
 func (f *fake) Status(context.Context) (api.Status, error) { return f.st, f.statErr }
@@ -80,6 +82,10 @@ func (f *fake) SetEnabled(_ context.Context, name string, on bool) error {
 	return f.editErr
 }
 func (f *fake) SetStrategy(_ context.Context, s api.Strategy) error { f.strategy = s; return f.editErr }
+func (f *fake) RefreshLogin(_ context.Context, name string) error {
+	f.tokens = append(f.tokens, name)
+	return f.editErr
+}
 
 var ansi = regexp.MustCompile(`\x1b\[[0-9;:]*[A-Za-z]`)
 
@@ -246,6 +252,47 @@ func TestSpaceAndStrategyKeys(t *testing.T) {
 	run(t, m, cmd)
 	if f.strategy != api.FillFirst {
 		t.Fatalf("strategy %q", f.strategy)
+	}
+}
+
+func TestTokenKeyRefreshesTheSelectedLogin(t *testing.T) {
+	f := fixture()
+	m := loaded(t, f)
+	m, _ = send(m, key("down"))
+	m, cmd := send(m, key("t"))
+	m = run(t, m, cmd)
+	if !slices.Equal(f.tokens, []string{"home"}) || !strings.Contains(text(m), i18n.T("tui.token_refreshed", "home")) {
+		t.Fatalf("refreshed %v\n%s", f.tokens, text(m))
+	}
+}
+
+func TestLoginEndsAreShown(t *testing.T) {
+	f := fixture()
+	now := time.Now()
+	soon, far, token := now.Add(30*time.Hour), now.Add(20*24*time.Hour), now.Add(5*time.Hour)
+	f.accts[0].LoginExpiresAt, f.accts[0].TokenExpiresAt, f.accts[0].LoginEnding = &soon, &token, true // work, in use
+	f.accts[1].LoginExpiresAt, f.accts[1].TokenExpiresAt = &far, &token                                // home
+	m := loadedAt(t, f, 100)
+	v := text(m)
+	for _, w := range []string{"! " + i18n.T("tui.login_ends", clock(soon, now)), "! " + i18n.T("tui.login_ends_claude", clock(soon, now)),
+		i18n.T("tui.token_until", clock(token, now)) + ", " + i18n.T("tui.token_by_claude")} {
+		if !strings.Contains(v, w) {
+			t.Errorf("work's ending login: no %q:\n%s", w, v)
+		}
+	}
+	m, _ = send(m, key("down"))
+	v = text(m)
+	if !strings.Contains(v, i18n.T("tui.login_until", far.Format("02.01 15:04"))+" · "+i18n.T("tui.token_until", clock(token, now))) ||
+		strings.Contains(v, i18n.T("tui.login_ends_run", clock(far, now), "home")) {
+		t.Errorf("the panel of home:\n%s", v)
+	}
+	fits(t, v, 100)
+	if v := text(loadedAt(t, f, 64)); !regexp.MustCompile(`work .*!`).MatchString(v) || strings.Contains(v, i18n.T("tui.token_by_claude")) {
+		t.Errorf("a narrow table must mark work, and its panel stay short:\n%s", v)
+	}
+	f.accts[1].LoginExpiresAt = &soon // the daemon tells which logins end, not this clock
+	if m, _ = send(loadedAt(t, f, 100), key("down")); strings.Contains(text(m), i18n.T("tui.login_ends_run", clock(soon, now), "home")) {
+		t.Errorf("home's login is flagged, which the daemon did not:\n%s", text(m))
 	}
 }
 

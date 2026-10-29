@@ -28,6 +28,7 @@
   --alert-edge: #5a6a7e;
   --sel: rgb(61 106 214 / .22);
   --skel: #e5e8eb;
+  --scrim: rgb(29 42 58 / .4);
   --shadow: 0 1px 2px rgb(29 42 58 / .07), 0 12px 28px -16px rgb(29 42 58 / .4);
   --sans: Geologica, system-ui, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, monospace;
@@ -71,6 +72,7 @@
     --alert-edge: #8a96a4;
     --sel: rgb(85 131 234 / .38);
     --skel: #1e2732;
+    --scrim: rgb(5 8 12 / .65);
     --shadow: 0 0 0 1px rgb(255 255 255 / .05), 0 14px 32px -12px rgb(0 0 0 / .8);
   }
 }
@@ -567,6 +569,12 @@ body:not(.ro) .viewer { display: none !important; }
 .no-mail .c-acct .mail { display: none; }
 .c-next { white-space: nowrap; }
 .c-next.m { color: var(--mut); }
+.login-line { display: flex; align-items: center; gap: 8px; }
+.lg { display: flex; flex-direction: column; font-size: 13px; }
+.lg-tok, .lg-end.none { color: var(--mut); }
+.lg-end.soon { color: var(--crit); font-weight: 500; }
+.tok, .relog { margin-left: auto; }
+.tok.busy .ico { animation: spin .7s linear infinite; }
 
 .stepper { display: inline-flex; align-items: center; gap: 4px; }
 .step {
@@ -645,6 +653,39 @@ body:not(.ro) .viewer { display: none !important; }
 .empty-art i:nth-child(2) { width: 50%; margin-left: 40%; }
 .empty-art i:nth-child(3) { width: 30%; margin-left: 20%; }
 
+/* Logging an account in again: a dialog on the login card's surface, a bottom sheet on phones. */
+.relog-box {
+  width: min(460px, calc(100vw - 2 * var(--gut)));
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  overflow: auto;
+}
+.relog-box::backdrop { background: var(--scrim); }
+.relog-card { display: flex; flex-direction: column; gap: 16px; padding: 24px; }
+.relog-h { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
+.relog-sub { color: var(--mut); margin-top: -8px; overflow-wrap: anywhere; }
+.relog-sub b { color: var(--ink); }
+.relog-steps { margin: 0; padding: 0; list-style: none; counter-reset: step; display: flex; flex-direction: column; gap: 20px; }
+.relog-steps > li { counter-increment: step; position: relative; display: flex; flex-direction: column; gap: 8px; padding-left: 34px; }
+.relog-steps > li::before {
+  content: counter(step);
+  position: absolute; left: 0; top: -1px;
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--edge); border-radius: 3px;
+  font-size: 12px; font-weight: 600; color: var(--mut);
+}
+.relog-label { font-weight: 500; }
+.relog-link { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: var(--ctl); }
+.relog-link .btn { text-decoration: none; }
+.relog-wait { display: inline-flex; align-items: center; gap: 8px; color: var(--mut); }
+.relog-wait .spin { display: inline-block; }
+.relog-actions { display: flex; align-items: center; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
+
 @media (max-width: 1180px) {
   .lead { grid-template-columns: minmax(0, 1fr); }
   .sk-lead { grid-template-columns: 1fr; }
@@ -657,7 +698,7 @@ body:not(.ro) .viewer { display: none !important; }
 .accts.blocks, .accts.blocks tbody, .accts.blocks tr, .accts.blocks .row > * { display: block; }
 .accts.blocks .row {
   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 16px;
-  grid-template-areas: "acct acct state act" "five week next models" "prio auto . .";
+  grid-template-areas: "acct acct state act" "five week next models" "prio auto login login";
   padding: 14px 0;
   border-bottom: 1px solid var(--line);
 }
@@ -672,6 +713,8 @@ body:not(.ro) .viewer { display: none !important; }
 .accts.blocks .c-use:nth-child(3) { grid-area: five; }
 .accts.blocks .c-use:nth-child(4) { grid-area: week; }
 .accts.blocks .c-next { grid-area: next; white-space: normal; }
+.accts.blocks .c-login { grid-area: login; }
+.accts.blocks .login-line { display: inline-flex; }
 .accts.blocks .c-prio { grid-area: prio; }
 .accts.blocks .c-auto { grid-area: auto; width: auto; }
 .accts.blocks .c-act { grid-area: act; width: auto; align-self: start; }
@@ -708,7 +751,9 @@ body:not(.ro) .viewer { display: none !important; }
   .sk-duty { height: 300px; }
 
 
-  .accts.blocks .row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "acct act" "state state" "five week" "next models" "prio auto"; }
+  .accts.blocks .row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "acct act" "state state" "five week" "next models" "login login" "prio auto"; }
+  .relog-box { width: 100%; max-width: none; margin: auto 0 0; border-width: 1px 0 0; border-radius: 6px 6px 0 0; max-height: calc(100dvh - 24px); }
+  .relog-card { padding: 20px 16px calc(16px + env(safe-area-inset-bottom)); }
   .rules { grid-template-columns: minmax(0, 1fr); }
   .how dl > div { grid-template-columns: 1fr; gap: 4px; }
   .empty { flex-direction: column; align-items: flex-start; padding: 20px; }

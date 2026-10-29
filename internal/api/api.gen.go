@@ -56,12 +56,21 @@ type Account struct {
 	FreeAt *time.Time `json:"free_at,omitempty"`
 
 	// LeavesAt Account in use only: when it reaches the five-hour, weekly or a per-model weekly threshold at its pace in use over the last hour, whichever comes first; absent when the pace is unknown or flat, or the window resets first
-	LeavesAt   *time.Time    `json:"leaves_at,omitempty"`
-	Models     []ModelWindow `json:"models"`
-	Name       string        `json:"name"`
-	NeedsLogin bool          `json:"needs_login"`
-	Priority   int           `json:"priority"`
-	SevenDay   *Window       `json:"seven_day,omitempty"`
+	LeavesAt *time.Time `json:"leaves_at,omitempty"`
+
+	// LoginEnding The login ends within 72 hours or has ended, and wants a new login: the daemon then announces it, and clients flag it
+	LoginEnding bool `json:"login_ending"`
+
+	// LoginExpiresAt When the login itself ends, as Anthropic said at its last refresh: a refresh does not move it, a new login does. Absent when unknown or while it needs a login.
+	LoginExpiresAt *time.Time    `json:"login_expires_at,omitempty"`
+	Models         []ModelWindow `json:"models"`
+	Name           string        `json:"name"`
+	NeedsLogin     bool          `json:"needs_login"`
+	Priority       int           `json:"priority"`
+	SevenDay       *Window       `json:"seven_day,omitempty"`
+
+	// TokenExpiresAt When the login's access token runs out: for the account in Claude Code, the token Claude Code holds and refreshes; for the others, ccswap's copy, which the daemon refreshes 10 minutes before. Absent while it needs a login or the daemon has not read it yet.
+	TokenExpiresAt *time.Time `json:"token_expires_at,omitempty"`
 }
 
 // AccountPatch defines model for AccountPatch.
@@ -98,20 +107,25 @@ type Catalog struct {
 // Error defines model for Error.
 type Error struct {
 	// Code Every code, by status; notes in parentheses (the page's test reads the codes from this list).
-	// 400 bad_request (malformed request), invalid_name, invalid_thresholds, invalid_strategy, invalid_lang, invalid_remote, invalid_config_dir (import: not a login dir in the ccswap home), login_incomplete,
+	// 400 bad_request (malformed request, also an empty login code), invalid_name, invalid_thresholds, invalid_strategy, invalid_lang, invalid_remote, invalid_config_dir (import: not a login dir in the ccswap home), login_incomplete,
 	// not_bundle (migrate import: not a ccswap bundle), bundle_version (migrate import: made by a newer ccswap),
-	// invalid_code (migrate import: the code is malformed), bad_bundle (migrate import: a wrong code or a damaged bundle);
+	// invalid_code (migrate import: the code is malformed), bad_bundle (migrate import: a wrong code or a damaged bundle),
+	// code_refused (login: claude got no login for the code; the link is spent);
 	// 401 unauthorized (TCP listener only: no key or a wrong one);
 	// 403 bad_code (web session: the code is wrong, used or expired), read_only (TCP listener only: the read key on a change),
 	// local_only (TCP listener only: a change or a web session on a listener that is not on a loopback address, or under a Host
 	// that names no loopback address or localhost);
-	// 404 not_found (also an unknown language of /v1/i18n), no_entry (adopt: Claude Code has no login);
+	// 404 not_found (also an unknown language of /v1/i18n, and a login code of an account removed meanwhile), no_entry (adopt: Claude Code has no login);
 	// 409 duplicate (also migrate import: an email here already without replace, or a name here with another email),
 	// remove_active, active_account (import: re-login the active account in claude),
+	// claude_owns (refresh login: the login is the one Claude Code uses, and Claude Code refreshes it itself),
 	// near_refresh, entry_changed (Claude Code kept rewriting its login during the switch), entry_expired (Claude Code's access token expired: it has not run for a while),
 	// target_refreshing (the target login has no access token yet: the daemon is refreshing it),
 	// unknown_active, cannot_identify, needs_login,
 	// migrating (the account is being moved to another machine: an export holds it),
+	// login_gone (login code: no link of the account with this id waits for a code, as none was started, or it expired,
+	// was used, was replaced or the daemon restarted), wrong_account (login code: the sign-in was another account's; the link is spent),
+	// login_pending (login: another link of the account waits for its code, until it is used or its 10 minutes run out),
 	// migrate_active (migrate: the account, or its login, is the one Claude Code uses), export_gone (migrate: no such
 	// export: cancelled, expired, or forgotten by a daemon restart, possibly after its commit landed, so check
 	// whether the accounts are still here), export_done (migrate cancel: the export is committed already),
@@ -119,9 +133,13 @@ type Error struct {
 	// bundle_spent (migrate import with replace: the bundle's login was used already; nothing is imported),
 	// no_update (update: no release is newer than this build, or this build has no version to compare),
 	// updating (update, restart: one is running already, or is done and the daemon is restarting);
+	// 429 login_cooldown (login: a start that cannot replace a link, under 30 seconds after the account's last one;
+	// the message says when one is taken again);
 	// 500 internal;
 	// 502 bundle_unchecked (migrate import with replace: the bundle's login was not refreshed, as Anthropic failed or
-	// no time was left; nothing is imported, try again),
+	// no time was left; nothing is imported, try again), refresh_failed (refresh login: Anthropic did not answer or
+	// refused for another reason than a spent login; the daemon tries again on its next tick),
+	// login_failed (login: claude auth login did not start, gave no link or did not answer the code in time),
 	// update_failed (update: GitHub failed, the download did not match its checksum, the new binary did not run, or
 	// the old one could not be replaced; nothing changed).
 	Code string `json:"code"`
@@ -147,6 +165,27 @@ type LangRequest struct {
 type Language struct {
 	Code string `json:"code"`
 	Name string `json:"name"`
+}
+
+// LoginCode defines model for LoginCode.
+type LoginCode struct {
+	// Code The code the sign-in showed, CODE#STATE, or the callback URL that carries it
+	Code string `json:"code"`
+
+	// Id The id the link came with
+	Id string `json:"id"`
+}
+
+// LoginLink defines model for LoginLink.
+type LoginLink struct {
+	// ExpiresAt The link is dropped then if no code came
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// Id The link's id: only it finishes or cancels this link
+	Id string `json:"id"`
+
+	// Url The sign-in page claude auth login printed
+	Url string `json:"url"`
 }
 
 // MigrateExport defines model for MigrateExport.
@@ -376,6 +415,12 @@ type ActivateAccountParams struct {
 	Force *bool `form:"force,omitempty" json:"force,omitempty"`
 }
 
+// CancelLoginParams defines parameters for CancelLogin.
+type CancelLoginParams struct {
+	// Id The id the link came with
+	Id string `form:"id" json:"id"`
+}
+
 // GetI18nParams defines parameters for GetI18n.
 type GetI18nParams struct {
 	IfNoneMatch *string `json:"If-None-Match,omitempty"`
@@ -389,6 +434,9 @@ type AdoptAccountJSONRequestBody = AdoptRequest
 
 // PatchAccountJSONRequestBody defines body for PatchAccount for application/json ContentType.
 type PatchAccountJSONRequestBody = AccountPatch
+
+// FinishLoginJSONRequestBody defines body for FinishLogin for application/json ContentType.
+type FinishLoginJSONRequestBody = LoginCode
 
 // SetAutoJSONRequestBody defines body for SetAuto for application/json ContentType.
 type SetAutoJSONRequestBody = AutoRequest
@@ -540,6 +588,33 @@ type ClientInterface interface {
 
 	// ActivateAccount performs a POST /v1/accounts/{name}/activate (the `ActivateAccount` operationId) request.
 	ActivateAccount(ctx context.Context, name string, params *ActivateAccountParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CancelLogin performs a DELETE /v1/accounts/{name}/login (the `CancelLogin` operationId) request.
+	//
+	// Drop the account's sign-in link of this id and stop its claude auth login, if there is one.
+	CancelLogin(ctx context.Context, name string, params *CancelLoginParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// StartLogin performs a POST /v1/accounts/{name}/login (the `StartLogin` operationId) request.
+	//
+	// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints and the link's id. Signing in there shows a code, which /v1/accounts/{name}/login/code takes with the id. Signing in on the daemon's machine, in the browser tab claude opens, finishes the login without a code. One link per account: while one waits for its code, a new one is refused (login_pending), except on the unix socket and to the admin key, whose new link replaces it once it is up. Without those, a start under 30 seconds after the account's last one is refused too (429 login_cooldown), as each runs a claude that may open a browser tab on the daemon's machine. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login, and only as a new login of an account here.
+	StartLogin(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// FinishLoginWithBody performs a POST /v1/accounts/{name}/login/code (the `FinishLogin` operationId) request,
+	// with any type of body and a specified content type.
+	//
+	// Hand claude auth login of the link with this id the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account), and the account must still be here (not_found): this never adds an account.
+	FinishLoginWithBody(ctx context.Context, name string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// FinishLogin performs a POST /v1/accounts/{name}/login/code (the `FinishLogin` operationId) request.
+	// Takes a body of the `application/json` content type.
+	//
+	// Hand claude auth login of the link with this id the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account), and the account must still be here (not_found): this never adds an account.
+	FinishLogin(ctx context.Context, name string, body FinishLoginJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RefreshLogin performs a POST /v1/accounts/{name}/refresh (the `RefreshLogin` operationId) request.
+	//
+	// Refresh the account's login now, as the daemon does 10 minutes before its access token runs out: a new access token, which also proves the login still works. It does not move login_expires_at. Never the login Claude Code uses (claude_owns), which Claude Code refreshes itself. An account refreshed under a minute ago is not asked again.
+	RefreshLogin(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// SetAutoWithBody performs a PUT /v1/auto (the `SetAuto` operationId) request,
 	// with any type of body and a specified content type.
@@ -822,6 +897,83 @@ func (c *Client) PatchAccount(ctx context.Context, name string, body PatchAccoun
 // ActivateAccount performs a POST /v1/accounts/{name}/activate (the `ActivateAccount` operationId) request.
 func (c *Client) ActivateAccount(ctx context.Context, name string, params *ActivateAccountParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewActivateAccountRequest(c.Server, name, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CancelLogin performs a DELETE /v1/accounts/{name}/login (the `CancelLogin` operationId) request.
+//
+// Drop the account's sign-in link of this id and stop its claude auth login, if there is one.
+func (c *Client) CancelLogin(ctx context.Context, name string, params *CancelLoginParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCancelLoginRequest(c.Server, name, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// StartLogin performs a POST /v1/accounts/{name}/login (the `StartLogin` operationId) request.
+//
+// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints and the link's id. Signing in there shows a code, which /v1/accounts/{name}/login/code takes with the id. Signing in on the daemon's machine, in the browser tab claude opens, finishes the login without a code. One link per account: while one waits for its code, a new one is refused (login_pending), except on the unix socket and to the admin key, whose new link replaces it once it is up. Without those, a start under 30 seconds after the account's last one is refused too (429 login_cooldown), as each runs a claude that may open a browser tab on the daemon's machine. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login, and only as a new login of an account here.
+func (c *Client) StartLogin(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStartLoginRequest(c.Server, name)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// FinishLoginWithBody performs a POST /v1/accounts/{name}/login/code (the `FinishLogin` operationId) request,
+// with any type of body and a specified content type.
+//
+// Hand claude auth login of the link with this id the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account), and the account must still be here (not_found): this never adds an account.
+func (c *Client) FinishLoginWithBody(ctx context.Context, name string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewFinishLoginRequestWithBody(c.Server, name, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// FinishLogin performs a POST /v1/accounts/{name}/login/code (the `FinishLogin` operationId) request.
+// Takes a body of the `application/json` content type.
+//
+// Hand claude auth login of the link with this id the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account), and the account must still be here (not_found): this never adds an account.
+func (c *Client) FinishLogin(ctx context.Context, name string, body FinishLoginJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewFinishLoginRequest(c.Server, name, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// RefreshLogin performs a POST /v1/accounts/{name}/refresh (the `RefreshLogin` operationId) request.
+//
+// Refresh the account's login now, as the daemon does 10 minutes before its access token runs out: a new access token, which also proves the login still works. It does not move login_expires_at. Never the login Claude Code uses (claude_owns), which Claude Code refreshes itself. An account refreshed under a minute ago is not asked again.
+func (c *Client) RefreshLogin(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRefreshLoginRequest(c.Server, name)
 	if err != nil {
 		return nil, err
 	}
@@ -1530,6 +1682,178 @@ func NewActivateAccountRequest(server string, name string, params *ActivateAccou
 			rawQueryFragments = append(rawQueryFragments, encoded)
 		}
 		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCancelLoginRequest constructs an http.Request for the CancelLogin method
+func NewCancelLoginRequest(server string, name string, params *CancelLoginParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "name", name, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/accounts/%s/login", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if queryFrag, err := runtime.StyleParamWithOptions("form", true, "id", params.Id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+			return nil, err
+		} else {
+			for _, qp := range strings.Split(queryFrag, "&") {
+				rawQueryFragments = append(rawQueryFragments, qp)
+			}
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewStartLoginRequest constructs an http.Request for the StartLogin method
+func NewStartLoginRequest(server string, name string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "name", name, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/accounts/%s/login", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewFinishLoginRequest calls the generic FinishLogin builder with application/json body
+func NewFinishLoginRequest(server string, name string, body FinishLoginJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewFinishLoginRequestWithBody(server, name, "application/json", bodyReader)
+}
+
+// NewFinishLoginRequestWithBody constructs an http.Request for the FinishLogin method, with any body, and a specified content type
+func NewFinishLoginRequestWithBody(server string, name string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "name", name, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/accounts/%s/login/code", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewRefreshLoginRequest constructs an http.Request for the RefreshLogin method
+func NewRefreshLoginRequest(server string, name string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "name", name, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/accounts/%s/refresh", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
 	}
 
 	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
@@ -2301,6 +2625,41 @@ type ClientWithResponsesInterface interface {
 	// Returns a wrapper object for the known response body format(s).
 	ActivateAccountWithResponse(ctx context.Context, name string, params *ActivateAccountParams, reqEditors ...RequestEditorFn) (*ActivateAccountResponse, error)
 
+	// CancelLoginWithResponse performs a DELETE /v1/accounts/{name}/login (the `CancelLogin` operationId) request.
+	//
+	// Drop the account's sign-in link of this id and stop its claude auth login, if there is one.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	CancelLoginWithResponse(ctx context.Context, name string, params *CancelLoginParams, reqEditors ...RequestEditorFn) (*CancelLoginResponse, error)
+
+	// StartLoginWithResponse performs a POST /v1/accounts/{name}/login (the `StartLogin` operationId) request.
+	//
+	// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints and the link's id. Signing in there shows a code, which /v1/accounts/{name}/login/code takes with the id. Signing in on the daemon's machine, in the browser tab claude opens, finishes the login without a code. One link per account: while one waits for its code, a new one is refused (login_pending), except on the unix socket and to the admin key, whose new link replaces it once it is up. Without those, a start under 30 seconds after the account's last one is refused too (429 login_cooldown), as each runs a claude that may open a browser tab on the daemon's machine. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login, and only as a new login of an account here.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	StartLoginWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*StartLoginResponse, error)
+
+	// FinishLoginWithBodyWithResponse performs a POST /v1/accounts/{name}/login/code (the `FinishLogin` operationId) request,
+	// with any type of body and a specified content type.
+	//
+	// Hand claude auth login of the link with this id the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account), and the account must still be here (not_found): this never adds an account.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	FinishLoginWithBodyWithResponse(ctx context.Context, name string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*FinishLoginResponse, error)
+
+	// FinishLoginWithResponse performs a POST /v1/accounts/{name}/login/code (the `FinishLogin` operationId) request.
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Hand claude auth login of the link with this id the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account), and the account must still be here (not_found): this never adds an account.
+	FinishLoginWithResponse(ctx context.Context, name string, body FinishLoginJSONRequestBody, reqEditors ...RequestEditorFn) (*FinishLoginResponse, error)
+
+	// RefreshLoginWithResponse performs a POST /v1/accounts/{name}/refresh (the `RefreshLogin` operationId) request.
+	//
+	// Refresh the account's login now, as the daemon does 10 minutes before its access token runs out: a new access token, which also proves the login still works. It does not move login_expires_at. Never the login Claude Code uses (claude_owns), which Claude Code refreshes itself. An account refreshed under a minute ago is not asked again.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	RefreshLoginWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*RefreshLoginResponse, error)
+
 	// SetAutoWithBodyWithResponse performs a PUT /v1/auto (the `SetAuto` operationId) request,
 	// with any type of body and a specified content type.
 	//
@@ -2856,6 +3215,268 @@ func (r ActivateAccountResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ActivateAccountResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CancelLoginResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON500 the response for an HTTP 500 `application/json` response
+	JSON500 *Error
+}
+
+// GetJSON500 returns the response for an HTTP 500 `application/json` response
+func (r CancelLoginResponse) GetJSON500() *Error {
+	return r.JSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r CancelLoginResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r CancelLoginResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CancelLoginResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CancelLoginResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type StartLoginResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *LoginLink
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *Error
+	// JSON409 the response for an HTTP 409 `application/json` response
+	JSON409 *Error
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *Error
+	// JSON500 the response for an HTTP 500 `application/json` response
+	JSON500 *Error
+	// JSON502 the response for an HTTP 502 `application/json` response
+	JSON502 *Error
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r StartLoginResponse) GetJSON200() *LoginLink {
+	return r.JSON200
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r StartLoginResponse) GetJSON404() *Error {
+	return r.JSON404
+}
+
+// GetJSON409 returns the response for an HTTP 409 `application/json` response
+func (r StartLoginResponse) GetJSON409() *Error {
+	return r.JSON409
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r StartLoginResponse) GetJSON429() *Error {
+	return r.JSON429
+}
+
+// GetJSON500 returns the response for an HTTP 500 `application/json` response
+func (r StartLoginResponse) GetJSON500() *Error {
+	return r.JSON500
+}
+
+// GetJSON502 returns the response for an HTTP 502 `application/json` response
+func (r StartLoginResponse) GetJSON502() *Error {
+	return r.JSON502
+}
+
+// GetBody returns the raw response body bytes
+func (r StartLoginResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r StartLoginResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r StartLoginResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r StartLoginResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type FinishLoginResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *Account
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *Error
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *Error
+	// JSON409 the response for an HTTP 409 `application/json` response
+	JSON409 *Error
+	// JSON500 the response for an HTTP 500 `application/json` response
+	JSON500 *Error
+	// JSON502 the response for an HTTP 502 `application/json` response
+	JSON502 *Error
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r FinishLoginResponse) GetJSON200() *Account {
+	return r.JSON200
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r FinishLoginResponse) GetJSON400() *Error {
+	return r.JSON400
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r FinishLoginResponse) GetJSON404() *Error {
+	return r.JSON404
+}
+
+// GetJSON409 returns the response for an HTTP 409 `application/json` response
+func (r FinishLoginResponse) GetJSON409() *Error {
+	return r.JSON409
+}
+
+// GetJSON500 returns the response for an HTTP 500 `application/json` response
+func (r FinishLoginResponse) GetJSON500() *Error {
+	return r.JSON500
+}
+
+// GetJSON502 returns the response for an HTTP 502 `application/json` response
+func (r FinishLoginResponse) GetJSON502() *Error {
+	return r.JSON502
+}
+
+// GetBody returns the raw response body bytes
+func (r FinishLoginResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r FinishLoginResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r FinishLoginResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r FinishLoginResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type RefreshLoginResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *Account
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *Error
+	// JSON409 the response for an HTTP 409 `application/json` response
+	JSON409 *Error
+	// JSON500 the response for an HTTP 500 `application/json` response
+	JSON500 *Error
+	// JSON502 the response for an HTTP 502 `application/json` response
+	JSON502 *Error
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r RefreshLoginResponse) GetJSON200() *Account {
+	return r.JSON200
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r RefreshLoginResponse) GetJSON404() *Error {
+	return r.JSON404
+}
+
+// GetJSON409 returns the response for an HTTP 409 `application/json` response
+func (r RefreshLoginResponse) GetJSON409() *Error {
+	return r.JSON409
+}
+
+// GetJSON500 returns the response for an HTTP 500 `application/json` response
+func (r RefreshLoginResponse) GetJSON500() *Error {
+	return r.JSON500
+}
+
+// GetJSON502 returns the response for an HTTP 502 `application/json` response
+func (r RefreshLoginResponse) GetJSON502() *Error {
+	return r.JSON502
+}
+
+// GetBody returns the raw response body bytes
+func (r RefreshLoginResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r RefreshLoginResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RefreshLoginResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r RefreshLoginResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -3947,6 +4568,71 @@ func (c *ClientWithResponses) ActivateAccountWithResponse(ctx context.Context, n
 	return ParseActivateAccountResponse(rsp)
 }
 
+// CancelLoginWithResponse performs a DELETE /v1/accounts/{name}/login (the `CancelLogin` operationId) request.
+//
+// Drop the account's sign-in link of this id and stop its claude auth login, if there is one.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) CancelLoginWithResponse(ctx context.Context, name string, params *CancelLoginParams, reqEditors ...RequestEditorFn) (*CancelLoginResponse, error) {
+	rsp, err := c.CancelLogin(ctx, name, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCancelLoginResponse(rsp)
+}
+
+// StartLoginWithResponse performs a POST /v1/accounts/{name}/login (the `StartLogin` operationId) request.
+//
+// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints and the link's id. Signing in there shows a code, which /v1/accounts/{name}/login/code takes with the id. Signing in on the daemon's machine, in the browser tab claude opens, finishes the login without a code. One link per account: while one waits for its code, a new one is refused (login_pending), except on the unix socket and to the admin key, whose new link replaces it once it is up. Without those, a start under 30 seconds after the account's last one is refused too (429 login_cooldown), as each runs a claude that may open a browser tab on the daemon's machine. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login, and only as a new login of an account here.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) StartLoginWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*StartLoginResponse, error) {
+	rsp, err := c.StartLogin(ctx, name, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStartLoginResponse(rsp)
+}
+
+// FinishLoginWithBodyWithResponse performs a POST /v1/accounts/{name}/login/code (the `FinishLogin` operationId) request,
+// with any type of body and a specified content type.
+//
+// Hand claude auth login of the link with this id the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account), and the account must still be here (not_found): this never adds an account.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) FinishLoginWithBodyWithResponse(ctx context.Context, name string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*FinishLoginResponse, error) {
+	rsp, err := c.FinishLoginWithBody(ctx, name, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseFinishLoginResponse(rsp)
+}
+
+// FinishLoginWithResponse performs a POST /v1/accounts/{name}/login/code (the `FinishLogin` operationId) request.
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Hand claude auth login of the link with this id the code its sign-in showed (CODE#STATE, or the callback URL) and store the login it gets as the account's. A link takes one code: after any answer but a bad request it is gone, and a new login starts with /v1/accounts/{name}/login again. The login must be the account's own email (wrong_account), and the account must still be here (not_found): this never adds an account.
+func (c *ClientWithResponses) FinishLoginWithResponse(ctx context.Context, name string, body FinishLoginJSONRequestBody, reqEditors ...RequestEditorFn) (*FinishLoginResponse, error) {
+	rsp, err := c.FinishLogin(ctx, name, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseFinishLoginResponse(rsp)
+}
+
+// RefreshLoginWithResponse performs a POST /v1/accounts/{name}/refresh (the `RefreshLogin` operationId) request.
+//
+// Refresh the account's login now, as the daemon does 10 minutes before its access token runs out: a new access token, which also proves the login still works. It does not move login_expires_at. Never the login Claude Code uses (claude_owns), which Claude Code refreshes itself. An account refreshed under a minute ago is not asked again.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) RefreshLoginWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*RefreshLoginResponse, error) {
+	rsp, err := c.RefreshLogin(ctx, name, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRefreshLoginResponse(rsp)
+}
+
 // SetAutoWithBodyWithResponse performs a PUT /v1/auto (the `SetAuto` operationId) request,
 // with any type of body and a specified content type.
 //
@@ -4594,6 +5280,211 @@ func ParseActivateAccountResponse(rsp *http.Response) (*ActivateAccountResponse,
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCancelLoginResponse parses an HTTP response from a CancelLoginWithResponse call
+func ParseCancelLoginResponse(rsp *http.Response) (*CancelLoginResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CancelLoginResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseStartLoginResponse parses an HTTP response from a StartLoginWithResponse call
+func ParseStartLoginResponse(rsp *http.Response) (*StartLoginResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &StartLoginResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest LoginLink
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON502 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseFinishLoginResponse parses an HTTP response from a FinishLoginWithResponse call
+func ParseFinishLoginResponse(rsp *http.Response) (*FinishLoginResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &FinishLoginResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Account
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON502 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseRefreshLoginResponse parses an HTTP response from a RefreshLoginWithResponse call
+func ParseRefreshLoginResponse(rsp *http.Response) (*RefreshLoginResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RefreshLoginResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Account
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON502 = &dest
 
 	}
 
@@ -5377,6 +6268,18 @@ type ServerInterface interface {
 	// (POST /v1/accounts/{name}/activate)
 	ActivateAccount(c fiber.Ctx, name string, params ActivateAccountParams) error
 
+	// (DELETE /v1/accounts/{name}/login)
+	CancelLogin(c fiber.Ctx, name string, params CancelLoginParams) error
+
+	// (POST /v1/accounts/{name}/login)
+	StartLogin(c fiber.Ctx, name string) error
+
+	// (POST /v1/accounts/{name}/login/code)
+	FinishLogin(c fiber.Ctx, name string) error
+
+	// (POST /v1/accounts/{name}/refresh)
+	RefreshLogin(c fiber.Ctx, name string) error
+
 	// (PUT /v1/auto)
 	SetAuto(c fiber.Ctx) error
 
@@ -5585,6 +6488,138 @@ func (siw *ServerInterfaceWrapper) ActivateAccount(c fiber.Ctx) error {
 
 	handler := func(c fiber.Ctx) error {
 		return siw.Handler.ActivateAccount(c, name, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// CancelLogin operation middleware
+func (siw *ServerInterfaceWrapper) CancelLogin(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Params("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter name: %w", err).Error())
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CancelLoginParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Required query parameter "id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "id", query, &params.Id, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter id: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.CancelLogin(c, name, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// StartLogin operation middleware
+func (siw *ServerInterfaceWrapper) StartLogin(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Params("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter name: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.StartLogin(c, name)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// FinishLogin operation middleware
+func (siw *ServerInterfaceWrapper) FinishLogin(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Params("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter name: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.FinishLogin(c, name)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// RefreshLogin operation middleware
+func (siw *ServerInterfaceWrapper) RefreshLogin(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Params("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter name: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.RefreshLogin(c, name)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -5992,6 +7027,14 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 
 	router.Post(options.BaseURL+"/v1/accounts/:name/activate", wrapper.ActivateAccount)
 
+	router.Post(options.BaseURL+"/v1/accounts/:name/refresh", wrapper.RefreshLogin)
+
+	router.Delete(options.BaseURL+"/v1/accounts/:name/login", wrapper.CancelLogin)
+
+	router.Post(options.BaseURL+"/v1/accounts/:name/login", wrapper.StartLogin)
+
+	router.Post(options.BaseURL+"/v1/accounts/:name/login/code", wrapper.FinishLogin)
+
 	router.Put(options.BaseURL+"/v1/auto", wrapper.SetAuto)
 
 	router.Put(options.BaseURL+"/v1/remote", wrapper.SetRemote)
@@ -6290,6 +7333,210 @@ type ActivateAccount500JSONResponse Error
 func (response ActivateAccount500JSONResponse) VisitActivateAccountResponse(ctx fiber.Ctx) error {
 	ctx.Response().Header.Set("Content-Type", "application/json")
 	ctx.Status(500)
+
+	return ctx.JSON(&response)
+}
+
+type CancelLoginRequestObject struct {
+	Name   string `json:"name"`
+	Params CancelLoginParams
+}
+
+type CancelLoginResponseObject interface {
+	VisitCancelLoginResponse(ctx fiber.Ctx) error
+}
+
+type CancelLogin204Response struct {
+}
+
+func (response CancelLogin204Response) VisitCancelLoginResponse(ctx fiber.Ctx) error {
+	ctx.Status(204)
+	return nil
+}
+
+type CancelLogin500JSONResponse struct{ ErrorJSONResponse }
+
+func (response CancelLogin500JSONResponse) VisitCancelLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(500)
+
+	return ctx.JSON(&response)
+}
+
+type StartLoginRequestObject struct {
+	Name string `json:"name"`
+}
+
+type StartLoginResponseObject interface {
+	VisitStartLoginResponse(ctx fiber.Ctx) error
+}
+
+type StartLogin200JSONResponse LoginLink
+
+func (response StartLogin200JSONResponse) VisitStartLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(200)
+
+	return ctx.JSON(&response)
+}
+
+type StartLogin404JSONResponse struct{ ErrorJSONResponse }
+
+func (response StartLogin404JSONResponse) VisitStartLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(404)
+
+	return ctx.JSON(&response)
+}
+
+type StartLogin409JSONResponse Error
+
+func (response StartLogin409JSONResponse) VisitStartLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(409)
+
+	return ctx.JSON(&response)
+}
+
+type StartLogin429JSONResponse Error
+
+func (response StartLogin429JSONResponse) VisitStartLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(429)
+
+	return ctx.JSON(&response)
+}
+
+type StartLogin500JSONResponse Error
+
+func (response StartLogin500JSONResponse) VisitStartLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(500)
+
+	return ctx.JSON(&response)
+}
+
+type StartLogin502JSONResponse Error
+
+func (response StartLogin502JSONResponse) VisitStartLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(502)
+
+	return ctx.JSON(&response)
+}
+
+type FinishLoginRequestObject struct {
+	Name string `json:"name"`
+	Body *FinishLoginJSONRequestBody
+}
+
+type FinishLoginResponseObject interface {
+	VisitFinishLoginResponse(ctx fiber.Ctx) error
+}
+
+type FinishLogin200JSONResponse Account
+
+func (response FinishLogin200JSONResponse) VisitFinishLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(200)
+
+	return ctx.JSON(&response)
+}
+
+type FinishLogin400JSONResponse struct{ ErrorJSONResponse }
+
+func (response FinishLogin400JSONResponse) VisitFinishLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(400)
+
+	return ctx.JSON(&response)
+}
+
+type FinishLogin404JSONResponse Error
+
+func (response FinishLogin404JSONResponse) VisitFinishLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(404)
+
+	return ctx.JSON(&response)
+}
+
+type FinishLogin409JSONResponse Error
+
+func (response FinishLogin409JSONResponse) VisitFinishLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(409)
+
+	return ctx.JSON(&response)
+}
+
+type FinishLogin500JSONResponse Error
+
+func (response FinishLogin500JSONResponse) VisitFinishLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(500)
+
+	return ctx.JSON(&response)
+}
+
+type FinishLogin502JSONResponse Error
+
+func (response FinishLogin502JSONResponse) VisitFinishLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(502)
+
+	return ctx.JSON(&response)
+}
+
+type RefreshLoginRequestObject struct {
+	Name string `json:"name"`
+}
+
+type RefreshLoginResponseObject interface {
+	VisitRefreshLoginResponse(ctx fiber.Ctx) error
+}
+
+type RefreshLogin200JSONResponse Account
+
+func (response RefreshLogin200JSONResponse) VisitRefreshLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(200)
+
+	return ctx.JSON(&response)
+}
+
+type RefreshLogin404JSONResponse struct{ ErrorJSONResponse }
+
+func (response RefreshLogin404JSONResponse) VisitRefreshLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(404)
+
+	return ctx.JSON(&response)
+}
+
+type RefreshLogin409JSONResponse Error
+
+func (response RefreshLogin409JSONResponse) VisitRefreshLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(409)
+
+	return ctx.JSON(&response)
+}
+
+type RefreshLogin500JSONResponse Error
+
+func (response RefreshLogin500JSONResponse) VisitRefreshLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(500)
+
+	return ctx.JSON(&response)
+}
+
+type RefreshLogin502JSONResponse Error
+
+func (response RefreshLogin502JSONResponse) VisitRefreshLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(502)
 
 	return ctx.JSON(&response)
 }
@@ -7033,6 +8280,18 @@ type StrictServerInterface interface {
 	// (POST /v1/accounts/{name}/activate)
 	ActivateAccount(ctx context.Context, request ActivateAccountRequestObject) (ActivateAccountResponseObject, error)
 
+	// (DELETE /v1/accounts/{name}/login)
+	CancelLogin(ctx context.Context, request CancelLoginRequestObject) (CancelLoginResponseObject, error)
+
+	// (POST /v1/accounts/{name}/login)
+	StartLogin(ctx context.Context, request StartLoginRequestObject) (StartLoginResponseObject, error)
+
+	// (POST /v1/accounts/{name}/login/code)
+	FinishLogin(ctx context.Context, request FinishLoginRequestObject) (FinishLoginResponseObject, error)
+
+	// (POST /v1/accounts/{name}/refresh)
+	RefreshLogin(ctx context.Context, request RefreshLoginRequestObject) (RefreshLoginResponseObject, error)
+
 	// (PUT /v1/auto)
 	SetAuto(ctx context.Context, request SetAutoRequestObject) (SetAutoResponseObject, error)
 
@@ -7268,6 +8527,121 @@ func (sh *strictHandler) ActivateAccount(ctx fiber.Ctx, name string, params Acti
 		return err
 	} else if validResponse, ok := response.(ActivateAccountResponseObject); ok {
 		if err := validResponse.VisitActivateAccountResponse(ctx); err != nil {
+			return err
+		}
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// CancelLogin operation middleware
+func (sh *strictHandler) CancelLogin(ctx fiber.Ctx, name string, params CancelLoginParams) error {
+	var request CancelLoginRequestObject
+
+	request.Name = name
+	request.Params = params
+
+	handler := func(ctx fiber.Ctx, request interface{}) (interface{}, error) {
+		return sh.ssi.CancelLogin(ctx.Context(), request.(CancelLoginRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CancelLogin")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(CancelLoginResponseObject); ok {
+		if err := validResponse.VisitCancelLoginResponse(ctx); err != nil {
+			return err
+		}
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// StartLogin operation middleware
+func (sh *strictHandler) StartLogin(ctx fiber.Ctx, name string) error {
+	var request StartLoginRequestObject
+
+	request.Name = name
+
+	handler := func(ctx fiber.Ctx, request interface{}) (interface{}, error) {
+		return sh.ssi.StartLogin(ctx.Context(), request.(StartLoginRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StartLogin")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(StartLoginResponseObject); ok {
+		if err := validResponse.VisitStartLoginResponse(ctx); err != nil {
+			return err
+		}
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// FinishLogin operation middleware
+func (sh *strictHandler) FinishLogin(ctx fiber.Ctx, name string) error {
+	var request FinishLoginRequestObject
+
+	request.Name = name
+
+	var body FinishLoginJSONRequestBody
+	if err := ctx.Bind().Body(&body); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+	request.Body = &body
+
+	handler := func(ctx fiber.Ctx, request interface{}) (interface{}, error) {
+		return sh.ssi.FinishLogin(ctx.Context(), request.(FinishLoginRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "FinishLogin")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(FinishLoginResponseObject); ok {
+		if err := validResponse.VisitFinishLoginResponse(ctx); err != nil {
+			return err
+		}
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// RefreshLogin operation middleware
+func (sh *strictHandler) RefreshLogin(ctx fiber.Ctx, name string) error {
+	var request RefreshLoginRequestObject
+
+	request.Name = name
+
+	handler := func(ctx fiber.Ctx, request interface{}) (interface{}, error) {
+		return sh.ssi.RefreshLogin(ctx.Context(), request.(RefreshLoginRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RefreshLogin")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(RefreshLoginResponseObject); ok {
+		if err := validResponse.VisitRefreshLoginResponse(ctx); err != nil {
 			return err
 		}
 	} else if response != nil {
@@ -7806,106 +9180,129 @@ func (sh *strictHandler) OpenWebSession(ctx fiber.Ctx) error {
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"3Hzrbhw3svCrEP19gKWgdfEl2Ozol6MEWQNJTmBr4R87gZbTXTPNVTfZS7I1njUEnKc5D3ae5KCqyL7M",
-	"cKSRE3md/WVrmmQVi8W6Fz9mhWlao0F7l80+ZhZca7QD+uN7a43F/xRGe9Ae/yvbtlaF9Mros384o/E3",
-	"V1TQSPzf/7ewzGbZ/zsbVj3jr+6MV7u7u8uzElxhVYuLZLMsfsjDQgT7dVGYjkG21rRgvWKkZOHVLeD/",
-	"/KaFbJYtjKlB6uwuz4oKihsoryXNWxrb4P+yUno48aqBLI+TnLdKr3AONFLVo+VGX7Rc1FCmQUGkze60",
-	"D5XsnN87MX6+tiADAXfWWKpbuK5MZx8i6nulS7OmKRYgbHyLvBGgkExTJ4yuNzOxrkAL2Xlz4tbKF5UI",
-	"X30FcajAVYVcSaVz+r2WHpwXFhx4YZb025pwcEJ6/FNZ4SsLrjJ16YSxNAR0iaOlqFWjvKiUz8W6UkUF",
-	"t2CFcrSuvRBy4UD7gJlY1Ka4UXoVIDxzAa5yotM32qx1lh94yjXIW3BJ+gROE0qLzsGYNgo3KosKmCZ4",
-	"KCd4KLlYA9zUG9ydFC3Yk8aUUMdf++0jRZR3opUF9MvjhpmSzouwWk+JwjTgxFJZ56fEwBm8TL93hL6s",
-	"pc8jkZlKTKOwyMH0oQ3Q/VIeGvcQ2/2EwwfeC8tJa+UG/9aygSRfa4DSXddmpXT6drRWGav8ZvRVaQ8r",
-	"sPjVwS3o61JuDr0Wd3lm4Z+dsngb/8Z4xSs/Ajbc9SmKeZQ241vdE+vXfuNm8Q8oPGIYmOkX6YtqV3bd",
-	"K1Hu2/pdClRpWv8W/tmBS4jJvUfwAJgdciV32XmzF/I9m9xaP45MgbiUXtZmtbt8LfUquTH80MkVj9oS",
-	"gbdgNyIOEEXh1rIVlXRZfhi//ximppi9AeciWFmWCmHK+pcR0t52sK30ruCDF4uNuIHNTEjB2xBr5Svx",
-	"8fxOfHx+J/73v/9HtLUsAGUJWJeLr75amLr86ishdSn+XpgS/i4aaW9cHkRR3VlZi4CRkI7Ez+WP370V",
-	"KAacOPo4z4yGeTbD1XMxz4yvwIa/745z0SrUoIiZtKuuQQF0niXOJ/LX1q5IsDGtnjmBg1DwKe+gXu7K",
-	"nS1+oKPN4y0dznNE4xSr9GbKlFGQPPtYAb/luEnnpe/chdDGg0NUW2lB+wocOHHEUpe2EtSeLFkX4AJO",
-	"LK1phK9Qfynnj0/n+tX5uVhI1O10O8RRI2skPZQi/HScC6VvZa3Ka9zo8NegNYffnLfSw2oz/IJUGf6y",
-	"0Bg/WqMweqlW16Wy4kg1rbF+hltDxYsCTeAHxdokXgLTwHHOn6+VRt6vwUM+19r460WnyxrEUaNWiIiY",
-	"rhmW4EHHefjP9S1Yp4zendXIEoizhIY1ajuaf5zP9YB/mYAWCY7Kr6cnwpPlXgylWFujVzyPLkcpG7lC",
-	"1mZ0L/CwnotOy85Xxqp/QSmOri5/oaMEDTZYAtrgHeUleEmjw+yXhAHjvIaFcOBw41OEaU6Our/EReBD",
-	"i+x+nBMzXSOMJFhcAkcwcLSGikrqFSC1alPIev/UODTgPCDG6/SjfSXJlsLD5C/GtAtZ3AhZlhYcS5VO",
-	"l4Dr/MU4P9c0B/kWp+1MwPGEXGWcZxq9wuWvl6bTpTiStTNC6t6C6SWyWYqz2+dn6vk3+jgX2lyD9nYj",
-	"jiTquJm4rGVXgrhEklYygF4pzSD+LMqOnRIIIHaYQQvS+aICC0LWSNgNCVvT4a0mKRtkKMksGkfCWGqS",
-	"kDwfiY9X7hau2TDIBf97He3l/tZZOOErx9Y0DuqNaqVFQTvC9TRIe21hiZc/F7Tvaz6/UhyNN34DLeK6",
-	"tsqjqkDJHi51R7oDAbEhfxzXCcw2WeeZQzzwsLy5AR0ZcobWLtPWC9tpVBjIPZWqCU0v7Qp8RBThkXTk",
-	"nwMi4Wgmy28gXOBSQmM08ttoDeVx7cAOPU0LScJHlaC9Wm5yMbLJ8rnm0+1R6KnqxALwVzyfUnjTn10j",
-	"i0ppYD74gOcj2Dth8IFbAvhelMzGjhAxR0/yHIHhV6NhwpydA4fUJyDXK/w8LKeNcF1RzTV/nuE+C6hr",
-	"KPN4CgRmaezKeA+aZWUgnAXnpfW5aI1zalFvhFx6YKQK06BbVUtd4hrOCPKE53pdAVFgtBMnpAXhvKr5",
-	"OgzolmN0A3JMhEA0FSGRM8m3iHgDT9oNXNsvQYNnvfaJA5zSBbkz6NxdbEOIRMGVg0ZxLdohWzKe72e4",
-	"vIwnD38WL8ZaOpa7AVdS88x3LizCYLS57tqS5Af/S4dloQbpSIizvvKV1KzuF52qy+B4xT8j+0f15w0S",
-	"AO0J4nFcl3iWIeTxQGfERHgtOq1xQECWOc4JOhW097YvEc1WeoVC8Ovzc4FWvNWypj9fRGXc6RAU+TTy",
-	"kTTg+4qcJZ14rX1lTasKsZSqJqWGBBToWdKUGpY+SelcoEynYEJPEbgOq/SE/0H5v3SLsDgHHUqz1rWR",
-	"pShVSRg16F4x5+PmXNfwQA1rsVBa2k0/1HY6JxTputYlUbswXc2fFxBJUA44Bz5Fey7pK7MxmogkiBK8",
-	"VPWFKGqF/oNwlVmHoAjqO49Gf0t+fgkPmsNhUASXMn3fEGn3umKDOZj2xn8vHzEfQ0rhif7TXiyjR7dN",
-	"zMFfIwtrnoGeZ7lwAIOxIFqlXYinDLZEdBfo3mjj1TKELMnEZ1xPvWnqCzHP5plYmro267AO2i9wmK+y",
-	"b6tdYI+0Q3LoOaTZYa9T/hNf7+9Jku5C58uddtlAF3bTTkKEeNPfXb55I6RtjE1dg7R/dcVakQJNfHBk",
-	"MpoWwjkxHhd8NRRanmh6aQp/OW8sCOWTcVrSkOkQ3lVagwi1pEs+KK3FBnE4PGxImm0X3s9kAJPoD2C9",
-	"IZ4MIvYsKGRkv8nPhNmDvMVQ83hkeTz6EQkeZIB7A0PTQN+ugFP6DX98vh3uSNx+dx8yLKBSUXzms4Mj",
-	"jjEfcPcARv3CDyK1l0LDTdnL8zsfghLZZZW3/CGIFlSrZol2aLRaB0+D7Hd0PmJ48oHo2TZ3RBTu2fgV",
-	"MtbefffMfgh3JqGMosKHByQ5Xv2onE3nVa3+JZnE40mmW4xlt+6axX6dNV4ltZ23bP+lVFOIfAQL8VS8",
-	"0eIdRZJ6OwScJ1MjJhL2G5HSxUQKW3dof0nn2bRBx5wtoj4fsIAlSkkSqzQmZy9N/I1NqF/DTIXrLnMS",
-	"QiGHsMdUPaVY+PiwOlvvbvsNpTJQw0acUmcT1kxP93KV5Rl6Qbjt2/PTF6fn2Ux3df2QTIzL5oRb+rga",
-	"4/dopHBeHYVF0XeT6JsurWm20yxocbORLd3N2NrlGOYuqaY5xynoH/EcpXZrsAernD6xOF3qfbUZ0kbS",
-	"3QQD+WLQ2J6SZu5mhHOpLBS+3qTgmJt94dsAYGU8CaqI/m7GInDJ/QeHgwja/jPbK5FuYLPHwiCvlk/1",
-	"mRON1HIFFKy+gc2FMEHd3wC0bHWQZUHGf1KepNi98r51s7Oz09NT8sXwb4oqDGEvY0Vr1S06VSECdiGg",
-	"af1G+M5qdNJwe4HtzPLhCPh+3iZvL6GrlE5TKLhBI6fRdrpHL0ql0gD7eDfarFOUGdzMNJjR2giShM3E",
-	"O0VhMTbo9mmzEaCcdnUPGfZr7geoEcUA+/rR8XvwVPah865Sy/22TTqxb02zi+JPcoOeaBPkuhYvXlFq",
-	"2Am5Mo8wVhOqioXbMqSIi85a/JszSgeunLawsrCZJGHUSst67zG1coPu/EMJs61lt9CIiyTha9m6yvh9",
-	"POslVyPMM+elh3km4BbJEsLQ9IfbFfW/n9GaZ5x4emgBNip29h4m5/dbu+96EPsqaLYLISZR6j5Z3gsM",
-	"jeIzra3zTHbMf7tqgioRrpcWIKXWQCPx7WYcxw11E1QsMusDrWTx4DJOdC3XN4TaiUkVS2Nu0TkzKJ2d",
-	"lxuHIugI1wslMsLhj7ij4177k0JZK0dJk7BZDmkpJ2Kpyc6eK+MSPHZpmrbzEGKD0VRECWn0BW3MgUdJ",
-	"x/EJRhuckG1bbxDxcUTZk4NgdFqJo7LmuLXym6QJ8jObopMlrdQ8RKyt8jA1gR5dWYMotKauH2XB0yze",
-	"+X7LKZYlMQUbWcKuEQyPLHTh7FdaMMQsFq46yasdXb0k0rF1v4YF2cHHlHKgzJY3uYhW7fMXfzo9Pz0/",
-	"fT775uXzb0bERRudPYGkKZBnGj7cU5+U5nEdfMuQvMB7wqzWbVUQ4fQAG3lch6hz5+SihrTqj/b0fRIq",
-	"WN0o0VAbutQVN6KCupzw4LQMKqq7XKBecj5WQO2qrGdOEJzowYAu2cPhu+oZkjZ8Zwcvm0fT1ENrPli7",
-	"J0U3J+UfFt5hHK7B6TMH9lYVaT94yP8/tPDVMBKN10n2LC2C2eJ5+CzZ4Z16cTuIrqXVSYPwZ6NPltLL",
-	"WoQh0bGlQ0YVxM724b4eCdhRFRYpmdEJ7Ox+h9ITuvZMmlaXw7FO9/Wt8ZVoOy+kqNQKPY8YIGdGPZ3r",
-	"parrE/pjRtEcNIX7UfmkpLIP9jTGeWEN+qDkTZBvsQ1AOuEMeaNcjljgzXGnc13IooITuZYWZo+en4ta",
-	"3aDojFhfPIh1ZRzMdShxRKw5+4o/5Fs1kO44FiEiaEA17UwQfZzKC+Kbf6pNvOtfU3llLGQcFavONVqw",
-	"MUNmOn8q3pM8ba1pWi8KrtKUFpD1GlyYReTOrsbLGarekT5i2w8u5YaEivQCbwT5wYTZSO1EuRQI9Mxd",
-	"sDDerlVYALpaZQ0MNK7EDHBLMhjtEs41ge4avAHDwWR5NjrpEeMO9zEy7l57+/ECa8feDB9S9+ZqIrcS",
-	"wZFwN68dFEaXCQ3xF7MWZulBj8MtTkh3A2XvukQnesKVXFQ7CJRRrSiDJrvOHQKaeXGAyUYpBxr6M05C",
-	"mhRrPxiLzLNq4zxYcModOKFR+rpcQ12P9/FAdexjY6LDJsYLTZBNIZKnj3gP+VPs8x4WlyGqfmC6bJoJ",
-	"+gQP9rB0yntYvOO6qUcEpmTZKM1BqFg8GKJQir1wRVHQxR6LfgtRBHM/avekfstDc4pJCHui+J8/WH9/",
-	"lB5HK71MRD5+NIWsxetf3kSZEdwIjljlAg0EKNkQlaLT6oNwprgBfyqutu1/sxTBA+grMaITwOu4uW6l",
-	"pQCC8uLIF+1b04WK0liXccaQz2iCPV2Z41ksKDVb5X6hYCfyUh4qEvqR9GWucSziQ5WAeyr4KAMOvMml",
-	"sQVEh5O32Ve3fvBOHMW0+tnHWurV3TEVXoUKyFAMoXyN9J8QE6mcjWzG7Dk6QBRkbkHLVmWz7OXp+enL",
-	"LM9a6SviJIQ1DqisgHiqtxLflHiIyvnXcVA+7U56cX7+qN6k35hm3Glbel3XffAdx3/N+KRW7/EeN0G1",
-	"yeDBOx8NDM4WUs0sGSUemtZYaTcTE4OLGaiwV7pxYvEILZxYhEiFb8qFgCwcn2b5FqU5J/q6j+2FauVv",
-	"Tbn53TrApnnXu+lN97aDu994xAed7O5JvuPkgBzO/tUjzhJH//kRox/HJ3f55KacUUUsyeUk+7yFFQot",
-	"O+KgYKjWG2SjMetM+GWXI6i/5GkZYtLC8uXwA6H12xji1RfKPh+1bOCO+aYGDglMj/0t1TePz31yAK9S",
-	"PEcVt1/WxlHTWNmAB+uy2d8+ZgpRRe0Ta6hmsQ5gynP5iH+2jadfSX9xZ9eUatTw9cSXZdxa9uVclr9S",
-	"aOmzXZbfg/3PyFsJAbEnYpMgnbdEaoA7MEoK+j87sJsBPFlt2RheCUvZ1T6bLWXtIJFa/fUJWaFPSSXU",
-	"KH4JZelDN8J/gvgMua22SxzqO/CvOSz5JLd+1Gp50KVPCOjvjIbHn8InUYpTpyN7fotFyPc5oawED50l",
-	"0rAUa+Q0rXJCipjOFZLLRYPTE0I07Buxp4NrzUSr9GqezXVhmiZAshvx/GtB/tgC/BpAsz8zPcofwH/P",
-	"G3jwAqHHxLs9cd6CbKZHui0Sdh89oJ2GqZ9K7ZGvtpfkVyNntff0Ql/SuGaau3lWuYDajX/o26QoI0tp",
-	"uW7h5cqJo9affPs258Kj1h9fiO/1qlauEmtKWlJotQfBKRgNp+JnE5vadhJtoHwFdjayXl1hATR3AOHP",
-	"TUz8Bkd8Q4khSu5AYSFhx/4A/s3zb/QeYVuB5EqIIG3fLE9+NhpOfiI1+4CUfzIhG7ufE4yD50mHmOUB",
-	"eYJ+SUHiS6O9NYliJm1OKIz8KD2WZ99fyUSe5zJEI/pMBhcVxtBIxO5wQAjqZUpyTU4j9B2Og++fnRCP",
-	"29NjFFnCZN2uOv328hfx6k/DlaLrGtPO84yu4zzL8pQRE3qrH2HEBBkTuzP26b4fh4V/b9037hr5A+i+",
-	"rSr/vT76d9a0o1bEcRtu36nAdSJ9bafzchOaV+mSyfWpeL3VGUh9g+BdUHe8+sPtgjPSpKOGRa4ePqBz",
-	"8FT8dYiaUhByV/iGwvPL2PjwFGySKm7/VHa5Gm+3p/oXGRKa9prcFxKiPOPkILkHIfbCgoW8ryRRljUv",
-	"n3ZsHuz0nuZNKTi5E5kqGA7cyMDrcwWxEy/OX3H33x+Md5m+fzDexe1yq3r55bMwDD1rSRb+hVIacWtK",
-	"U2/3qGstPALhjYis3iT6v9lmXFqAf4UxR9TlG1rv0YTk6irOsjTHotNe1anGLqZsMEi5Qs8mOr3ynfZt",
-	"HPe1aJSm7FCtlp5r2AgpTsnsb5qjZtrQpMCXijn3cF4OzYFPysvT/rPPHKia7nOP+RyoSbXqJFJK+A8I",
-	"UkTWU839l+l1We4qg0gTetFm92rmQtZ1LBvkexTujQBZVMFXk7Gbk4tyXQu6dNPO8jiLmsjCCwvMyWup",
-	"qNhnVANC1bFVbMyNU5VmmH1Rxvh5CJpDLTSn4v2owT1PNbhPO/FCJRANd1RISRd7eLACyuh7hjIgqTd9",
-	"k/vaot2m8yEhK0fzGN548ZmYvG2As3Y69i0sO8eamw8VFWdPQUR3TY3sNwDtmJQtlSwt0Gl/eR70s6NK",
-	"K1j6mEPum800fPDCq+LmEXIktHU+qRz5t2YLp/vcI0dkWY5apr8kDYujXzxehATeGsuO7eQQD3iM5/VJ",
-	"wmwoPg5+5xb15U2sCCOJFTV9KEs46mzdi/cb2BwLpZ0HyY9QOnpTshczF/w8UOs3Aqdx5xZZsstDbsQ7",
-	"8KEG+mluw7RF7g/gBttRr9oeh4RNoVFvGjWJudimJR2poNCmVRpweWzPlD4OGr3Ao2WDvsC0u4vaN9lU",
-	"Cs4DMYGkhwFk/7gL1f+E3s7BLWFd0KETFDgrdpBJaxVJcDbWgsTldztH1aFhHedN6w7hotjg91Q8NOmb",
-	"+8yyNO4tIUXfjzy1qaHsvkiHxVFj2z2sLdfTAmBjboTSbZeIS3OT3BOd+LQD71OlxuuiAHSwPpPkGHri",
-	"ksVgP4B/Fxvf/g3pze/ileYBn7zHoRZ7X0j13dDe8CS8sVUv/gfQKdPemKRJMH5og/14fhQvTrwYCxnq",
-	"e3N9oGD0IhCnEZG28XvwapKa/2rcW/IUZzVu9fm8Unsb8rb52z/xjf7Ychnqhj8DLwy9TGkZ/Ia1/Pgh",
-	"jomy9+Pu+OG5B9T2IZdp9xgowV+1RaVuQTSdiy+RsXtKMJ4Nb5K5U//B91mx0dtkNNN2OvjRIQswXiK+",
-	"ITf0yfS+4+gds4QJ0vcDjsBx1Ci4wVsvyUVtK6xaVZ5NpURxKJOUS32yJzUVQgda2uGK56jNejDmvkhP",
-	"ag2Ls1iCvycMs/VM1pFTelXTE5K5oNdwhQyBwmO2Rydl595KeoF4u1YcxVVEIDz7eoj9eWlBeoi9GE94",
-	"whHEnhOOsbhPkgyjPe+n+xUSTkgmeh/uiueVIOhOkQKJvVOReHlXeXpZZngiui+ekFzHnyzSp8msnkZt",
-	"CH3a5NX5q93z+q8W9KhB5WmUz26byWfWQaMd7g3BhGP6FHfh5ZdSpUjNW/Y25v3pORp6f2Z2dsZebXb3",
-	"693/BQAA//8=",
+	"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",
+	"KvYmxv2pJSz1gJ2dnbFVO7n97fb/AwAA//8=",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

@@ -93,11 +93,14 @@ const where = () => state.status?.host || t('host.any');
 // and timeout. Any other code reads e.other.
 const ERR_CODES = ['offline', 'timeout', 'unknown_active', 'internal', 'entry_expired', 'entry_changed', 'cannot_identify',
   'invalid_thresholds', 'target_refreshing', 'not_found', 'needs_login', 'read_only', 'local_only', 'bad_code', 'migrating',
-  'no_update', 'updating', 'update_failed'];
+  'claude_owns', 'refresh_failed', 'active_account', 'code_refused', 'login_gone', 'wrong_account', 'login_failed', 'login_pending',
+  'login_cooldown', 'no_update', 'updating', 'update_failed'];
 
 const errArgs = (e, name) => ({
   cannot_identify: [e.message], invalid_thresholds: [e.message], target_refreshing: [name], not_found: [name],
-  needs_login: [name, where()], migrating: [name], update_failed: [e.message],
+  needs_login: [name, where()], migrating: [name], claude_owns: [name], active_account: [name, where()],
+  wrong_account: [state.accounts?.find((a) => a.name === name)?.email || name], login_failed: [where(), e.message],
+  login_pending: [name], login_cooldown: [name], update_failed: [e.message],
 }[e.code] ?? [where()]);
 
 function describe(e, name = '<name>') {
@@ -354,16 +357,19 @@ function draw() {
     $('empty-p').replaceChildren(...tNodes('empty.add', where()));
   }
   renderAccounts();
+  // a login renewed meanwhile, say by signing in on that machine in the tab claude opened, needs no dialog
+  if ($('relog').open && !state.accounts.some((a) => a.name === relog.name && (a.needs_login || a.login_ending))) closeRelog();
   renderHow();
   renderRules();
   if (!state.admin) readOnly();
-  else asleep(state.offline);
+  asleep(state.offline);
 }
 
 // readOnly disables every control of a page without the admin key: it only looks, and the controls are
 // hidden. The daemon refuses such a change anyway; ccswap web on this machine opens a page that can make it.
+// Logging an account in again works with either key.
 function readOnly() {
-  for (const el of document.querySelectorAll('#auto, #strategy, #refresh, #rules button, #accounts button, #accounts .enabled')) {
+  for (const el of document.querySelectorAll('#auto, #strategy, #refresh, #rules button, #accounts button:not(.relog), #accounts .enabled')) {
     el.disabled = true;
   }
   for (const el of document.querySelectorAll('#rules input, #accounts input[type="number"]')) el.readOnly = true;
@@ -430,13 +436,20 @@ function renderHost(host) {
 
 const pageTitle = (host) => (host ? t('title', host) : 'ccswap');
 
-// alertBox is one line of the ink strip: an account's tag, the message, a quieter tail, and a button that
-// copies the command when the browser lets the page write the clipboard.
-function alertBox(name, nodes, tail, cmd) {
+// alertBox is one line of the ink strip: an account's tag, the message, a quieter tail, a button that logs
+// the account in again here, and one that copies the command when the browser lets the page write the clipboard.
+function alertBox(name, nodes, tail, cmd, login) {
   const body = h('p', 'alert-body', ...nodes);
   if (tail) body.append(' ', h('span', 'q', tail));
   const box = h('div', 'alert', name ? chip(name) : null, body);
   box.setAttribute('role', 'alert');
+  if (login) {
+    const b = h('button', 'btn relog-go', t('relog.open'));
+    b.type = 'button';
+    b.setAttribute('aria-label', t('relog.openLabel', login));
+    b.addEventListener('click', () => openRelog(login, b));
+    box.append(b);
+  }
   if (cmd && navigator.clipboard) {
     const b = h('button', 'btn', t('alert.copy'));
     b.type = 'button';
@@ -454,10 +467,13 @@ function alertBox(name, nodes, tail, cmd) {
 
 let alertsShown = '';
 
+// loginEnd is when a's login ends, as Anthropic said at its last refresh; null when unknown or already gone.
+const loginEnd = (a) => (!a.needs_login && a.login_expires_at ? new Date(a.login_expires_at) : null);
+
 // renderAlerts raises the ink strip only when something needs the user, the gravest first: every account at
-// its threshold, a login ccswap does not know, accounts that need a new login. (The daemon being down comes
-// before them all, in the banner.) It redraws only when that changes, so the alerts are announced once and a
-// focused button keeps its focus.
+// its threshold, a login ccswap does not know, accounts that need a new login, logins about to end, which no
+// token refresh extends. (The daemon being down comes before them all, in the banner.) It redraws only when
+// that changes, so the alerts are announced once and a focused button keeps its focus.
 function renderAlerts() {
   const st = state.status, specs = [];
   const usable = state.accounts.filter((a) => a.enabled && !a.needs_login);
@@ -470,14 +486,20 @@ function renderAlerts() {
   const login = ordered().filter((a) => a.needs_login);
   if (login.length === 1) {
     const n = login[0].name;
-    specs.push([n, 'alert.login', [n, where()], 'alert.skips', `ccswap login ${n}`]);
+    specs.push([n, 'alert.login', [n, where()], 'alert.skips', `ccswap login ${n}`, login[0].active ? null : n]);
   } else if (login.length > 1) {
     specs.push([null, 'alert.logins', [login.length, login.map((a) => a.name).join(', '), where()], 'alert.skipsAll', null]);
+  }
+  const ending = state.accounts.filter((a) => a.login_ending).map((a) => [a, loginEnd(a)]);
+  for (const [a, end] of ending.sort((p, q) => p[1] - q[1])) {
+    const key = end <= Date.now() ? (a.active ? 'alert.loginEndedClaude' : 'alert.loginEnded')
+      : a.active ? 'alert.loginEndsClaude' : 'alert.loginEnds';
+    specs.push([a.name, key, [a.name, clock(end), where()], 'alert.loginTail', a.active ? null : `ccswap login ${a.name}`, a.active ? null : a.name]);
   }
   const shown = JSON.stringify([lang, specs.map(([n, ...rest]) => [n && tagOf(n), n, ...rest])]);
   if (shown === alertsShown) return;
   alertsShown = shown;
-  $('alerts').replaceChildren(...specs.map(([n, key, args, tail, cmd]) => alertBox(n, tNodes(key, ...args), tail && t(tail), cmd)));
+  $('alerts').replaceChildren(...specs.map(([n, key, args, tail, cmd, login]) => alertBox(n, tNodes(key, ...args), tail && t(tail), cmd, login)));
 }
 
 let updateShown = '';
@@ -919,12 +941,14 @@ function makeRow(name) {
     prio: el.querySelector('.stepper input'),
     enabled: el.querySelector('.enabled'),
     use: el.querySelector('.use'),
+    tok: el.querySelector('.tok'),
+    relog: el.querySelector('.relog'),
     msg: el.querySelector('.msg'),
     note: el.querySelector('.row-note'),
     pending: { prio: false, enabled: false, use: false },
     prioTimer: 0,
   };
-  for (const b of el.querySelectorAll('.step')) {
+  for (const b of el.querySelectorAll('[data-step]')) {
     b.addEventListener('click', () => {
       const cur = parseInt(r.prio.value, 10);
       r.prio.value = String((Number.isNaN(cur) ? r.account.priority : cur) + Number(b.dataset.step));
@@ -936,7 +960,29 @@ function makeRow(name) {
   r.prio.addEventListener('keydown', (e) => { if (e.key === 'Enter') r.prio.blur(); });
   r.enabled.addEventListener('change', () => saveEnabled(r));
   r.use.addEventListener('click', () => switchTo(r));
+  r.tok.addEventListener('click', () => refreshToken(r));
+  r.relog.addEventListener('click', () => openRelog(r.name, r.relog));
   return r;
+}
+
+// loginCell says when a's login ends, in red once that is close, and until when its token lasts: the times
+// alone, as in the usage columns, the words in their titles. A login weeks off shows its day only. A login
+// that is gone or close to its end gets a Log in button instead of the token's, which cannot extend it.
+function loginCell(r, a) {
+  const end = loginEnd(a), tok = !a.needs_login && a.token_expires_at ? new Date(a.token_expires_at) : null;
+  const endEl = r.el.querySelector('.lg-end'), tokEl = r.el.querySelector('.lg-tok'), now = Date.now();
+  endEl.textContent = !end ? '—' : end - now >= 6 * 24 * HOUR ? dateFmt.format(end) : clock(end);
+  endEl.title = !end ? (a.needs_login ? '' : t('login.unknown')) : t(end <= now ? 'login.ended' : 'login.until', clock(end));
+  endEl.classList.toggle('soon', Boolean(end) && a.login_ending);
+  endEl.classList.toggle('none', !end);
+  tokEl.textContent = !tok ? '' : tok <= now ? t('login.expired') : clock(tok);
+  tokEl.title = !tok ? '' : `${t(tok <= now ? 'login.tokenExpired' : 'login.tokenUntil', clock(tok))}. ${t(a.active ? 'login.claude' : 'login.auto')}`;
+  tokEl.hidden = !tok;
+  r.relog.hidden = a.active || !a.needs_login && !a.login_ending;
+  r.relog.setAttribute('aria-label', t('relog.openLabel', a.name));
+  r.tok.hidden = a.active || a.needs_login || !r.relog.hidden;
+  r.tok.setAttribute('aria-label', r.tok.dataset.title = t('row.refreshToken', a.name));
+  if (!r.tok.classList.contains('asleep')) r.tok.title = r.tok.dataset.title;
 }
 
 // usage fills a table cell with a window's use, its threshold tick and its reset.
@@ -978,6 +1024,7 @@ function renderRow(r, a) {
     : [h('span', 'use-model', '—')]));
   next.textContent = nextChange(a, kind);
   next.classList.toggle('m', kind === 'ready' || kind === 'off');
+  loginCell(r, a);
   for (const td of el.querySelectorAll('[data-col]')) td.dataset.label = t(td.dataset.col);
 
   el.querySelector('[data-step="-1"]').setAttribute('aria-label', t('row.lower', a.name));
@@ -1141,7 +1188,8 @@ function setOffline(e) {
 // asleep disables the controls that ask the daemon while it cannot be reached, saying why in their title, and
 // wakes them once it is back.
 function asleep(off) {
-  for (const el of document.querySelectorAll('#auto, #strategy, #refresh, #upd-go, #accounts .use, #accounts .step, #accounts .enabled, #accounts .stepper input')) {
+  const live = state.admin ? '#auto, #strategy, #refresh, #upd-go, #accounts .use, #accounts .step, #accounts .enabled, #accounts .stepper input, .relog-go' : '.relog-go';
+  for (const el of document.querySelectorAll(live)) {
     if (off) {
       el.classList.add('asleep');
       el.disabled = true;
@@ -1149,10 +1197,10 @@ function asleep(off) {
     } else if (el.classList.contains('asleep')) {
       el.classList.remove('asleep');
       el.disabled = el.classList.contains('held'); // its request still runs
-      el.title = el.dataset.tTitle ? t(el.dataset.tTitle) : '';
+      el.title = el.dataset.tTitle ? t(el.dataset.tTitle) : el.dataset.title || '';
     }
   }
-  syncRuleButtons();
+  if (state.admin) syncRuleButtons();
 }
 
 function authError(text) {
@@ -1355,6 +1403,167 @@ async function switchTo(r) {
   }
 }
 
+// refreshToken gets r's login a new token now; the daemon refuses the login Claude Code uses, and asks
+// Anthropic at most once a minute per login.
+async function refreshToken(r) {
+  setBusy(r.tok, true);
+  hideRowMsg(r);
+  try {
+    patchLocal(r.name, await api('POST', `/v1/accounts/${encodeURIComponent(r.name)}/refresh`));
+  } catch (e) {
+    if (e.code === 'unauthorized') return showAuth(true);
+    rowMsg(r, `${t('x.token')} ${describe(e, r.name)}`);
+  } finally {
+    setBusy(r.tok, false);
+  }
+  render();
+}
+
+const relog = { name: '', from: null, run: 0, stage: '', id: '', url: '', expires: null, timer: 0, checking: false, done: false, queue: Promise.resolve() };
+
+// loginCall sends login requests one at a time, in the order the dialog makes them.
+function loginCall(method, name, tail, body) {
+  const p = relog.queue.then(() => api(method, `/v1/accounts/${encodeURIComponent(name)}/login${tail}`, body));
+  relog.queue = p.catch(() => {});
+  return p;
+}
+
+// dropLink stops the daemon's claude auth login of a link this page got: a link that waits for its code
+// refuses the read key a new one until it runs out.
+function dropLink(name, id) {
+  if (id) loginCall('DELETE', name, `?id=${encodeURIComponent(id)}`).catch(() => {});
+}
+
+// openRelog logs name in again from the page: the daemon runs claude auth login and hands its sign-in link
+// here; the code the sign-in shows comes back through the form. from gets the focus back on close.
+function openRelog(name, from) {
+  const d = $('relog');
+  if (d.open || !state.accounts.some((a) => a.name === name)) return;
+  Object.assign(relog, { name, from, id: '', done: false });
+  d.querySelector('.relog-h .chip').className = 'chip ' + tagOf(name);
+  relogTexts();
+  d.showModal();
+  getLink();
+}
+
+function relogTexts() {
+  const a = state.accounts.find((x) => x.name === relog.name);
+  $('relog-title').textContent = t('relog.title', relog.name);
+  $('relog-sub').replaceChildren(...tNodes('relog.sub', a?.email || relog.name, where()));
+  const hint = $('relog-hint');
+  hint.textContent = relog.stage === 'ready' ? t('relog.until', clock(relog.expires)) : '';
+  hint.hidden = !hint.textContent;
+}
+
+// relogStage shows the link as it stands: 'wait' while the daemon gets one, 'ready' with it, 'spent' once a
+// code used it, it ended or none came, when only a new one helps.
+function relogStage(stage) {
+  relog.stage = stage;
+  const ready = stage === 'ready';
+  $('relog-wait').hidden = stage !== 'wait';
+  $('relog-open').hidden = !ready;
+  $('relog-copy').hidden = !ready || !navigator.clipboard;
+  $('relog-again').hidden = stage !== 'spent';
+  $('relog-code').disabled = !ready;
+  $('relog-submit').disabled = !ready || relog.checking;
+  relogTexts();
+}
+
+function relogErr(id, text) {
+  $(id).textContent = text;
+  $(id).hidden = !text;
+  if (id === 'relog-err') $('relog-code').setAttribute('aria-invalid', text ? 'true' : 'false');
+}
+
+async function getLink() {
+  const n = ++relog.run, name = relog.name;
+  clearTimeout(relog.timer);
+  relogErr('relog-err', '');
+  relogErr('relog-link-err', '');
+  $('relog-code').value = '';
+  relogStage('wait');
+  dropLink(name, relog.id); // the one before, if its code did not spend it
+  relog.id = '';
+  try {
+    const l = await loginCall('POST', name, '');
+    if (n !== relog.run) return dropLink(name, l.id);
+    relog.id = l.id;
+    relog.url = l.url;
+    relog.expires = new Date(l.expires_at);
+    $('relog-open').href = l.url;
+    relogStage('ready');
+    $('relog-open').focus();
+    relog.timer = setTimeout(() => {
+      if (n !== relog.run || relog.checking) return;
+      relogErr('relog-link-err', describe(new ApiError('login_gone'), name));
+      relogStage('spent');
+    }, relog.expires - Date.now());
+  } catch (e) {
+    if (n !== relog.run) return;
+    if (e.code === 'unauthorized') { closeRelog(); return showAuth(true); }
+    relogErr('relog-link-err', describe(e, name));
+    relogStage('spent');
+    $('relog-again').focus();
+  }
+}
+
+async function finishRelog(ev) {
+  ev.preventDefault();
+  if (relog.stage !== 'ready' || relog.checking) return;
+  const input = $('relog-code'), code = input.value.trim(), submit = $('relog-submit');
+  if (!code) {
+    relogErr('relog-err', t('relog.empty'));
+    return input.focus();
+  }
+  const n = relog.run, name = relog.name;
+  relog.checking = true;
+  relogErr('relog-err', '');
+  setBusy(submit, true, t('relog.checking'));
+  input.readOnly = true;
+  try {
+    const a = await loginCall('POST', name, '/code', { id: relog.id, code });
+    if (n === relog.run) relog.done = true; // the code spent the link: nothing to drop
+    patchLocal(name, a);
+    render();
+    if (n === relog.run) closeRelog();
+  } catch (e) {
+    if (n !== relog.run) return;
+    if (e.code === 'unauthorized') { closeRelog(); return showAuth(true); }
+    relogErr('relog-err', describe(e, name));
+    if (e.code === 'offline') return input.focus(); // the code never left: the link still takes it
+    clearTimeout(relog.timer);
+    relogStage('spent');
+    $('relog-again').focus();
+  } finally {
+    relog.checking = false;
+    setBusy(submit, false, t('relog.submit'));
+    input.readOnly = false;
+    if (n === relog.run) relogStage(relog.stage);
+  }
+}
+
+// closeRelog drops the link unless its code was taken: the daemon then stops its claude auth login. The focus
+// goes back to the button that opened it or, once a new login hid that one, to the account's row.
+function closeRelog() {
+  const d = $('relog');
+  if (!d.open) return;
+  relog.run++;
+  clearTimeout(relog.timer);
+  if (!relog.done) dropLink(relog.name, relog.id);
+  d.close();
+  const r = rows.get(relog.name);
+  [relog.from, r?.relog, r?.tok, r?.use].find((el) => el?.isConnected && !el.hidden && el.offsetParent)?.focus();
+}
+
+async function copyLink(ev) {
+  const b = ev.currentTarget;
+  try {
+    await navigator.clipboard.writeText(relog.url);
+    b.textContent = t('alert.copied');
+    setTimeout(() => { b.textContent = t('relog.copyLink'); }, 2000);
+  } catch { /* the browser said no: the link opens with the button beside it */ }
+}
+
 async function setAuto() {
   const auto = $('auto');
   const want = auto.checked;
@@ -1543,6 +1752,7 @@ function applyLang() {
     showRuleErrors(false);
   }
   if (state.fault) fault(state.fault); // in the new language
+  if ($('relog').open) relogTexts();
   if (!state.status && state.loading) {
     $('live-text').replaceChildren(h('span', 'lseg m', t('boot.connecting', location.host)));
   }
@@ -1610,6 +1820,12 @@ async function init() {
     showAuth(false);
   });
   $('refresh').addEventListener('click', refresh);
+  $('relog-form').addEventListener('submit', finishRelog);
+  $('relog-cancel').addEventListener('click', closeRelog);
+  $('relog-again').addEventListener('click', getLink);
+  $('relog-copy').addEventListener('click', copyLink);
+  $('relog-code').addEventListener('input', () => relogErr('relog-err', ''));
+  $('relog').addEventListener('cancel', (e) => { e.preventDefault(); closeRelog(); });
   $('auto').addEventListener('change', setAuto);
   $('strategy').addEventListener('change', setStrategy);
   for (const sel of document.querySelectorAll('.lang-switch select')) sel.addEventListener('change', () => switchLang(sel.value));

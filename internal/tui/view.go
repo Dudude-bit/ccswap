@@ -147,6 +147,47 @@ func clock(t, now time.Time) string {
 	return weekday(t.Weekday()) + " " + t.Format("15:04")
 }
 
+// date is clock for a time within six days, else the date and time: a weekday alone could be another week's.
+func date(t, now time.Time) string {
+	if t.Sub(now).Abs() < 6*24*time.Hour {
+		return clock(t, now)
+	}
+	return t.Local().Format("02.01 15:04")
+}
+
+// loginEnds is when a's login ends, if the daemon flags it as ending: no refresh extends it, a new login must.
+func loginEnds(a api.Account) (time.Time, bool) {
+	if a.NeedsLogin || !a.LoginEnding || a.LoginExpiresAt == nil {
+		return time.Time{}, false
+	}
+	return *a.LoginExpiresAt, true
+}
+
+// tokens says when a's login ends and until when its token lasts; "" when neither is known. A narrow
+// panel leaves out who renews the token.
+func tokens(a api.Account, now time.Time, narrow bool) string {
+	var parts []string
+	switch {
+	case a.NeedsLogin:
+		return ""
+	case a.LoginExpiresAt != nil:
+		parts = append(parts, i18n.T("tui.login_until", date(*a.LoginExpiresAt, now)))
+	case a.TokenExpiresAt != nil:
+		parts = append(parts, i18n.T("tui.login_unknown"))
+	}
+	if t := a.TokenExpiresAt; t != nil {
+		tok := i18n.T("tui.token_expired")
+		if t.After(now) {
+			tok = i18n.T("tui.token_until", clock(*t, now))
+		}
+		if a.Active && !narrow {
+			tok += ", " + i18n.T("tui.token_by_claude")
+		}
+		parts = append(parts, tok)
+	}
+	return strings.Join(parts, " · ")
+}
+
 func until(t, now time.Time) string {
 	n := max(1, int(t.Sub(now).Round(time.Minute)/time.Minute))
 	d, h, mins := n/1440, n%1440/60, n%60
@@ -354,6 +395,11 @@ func (m *Model) state(a api.Account, now time.Time, dim bool) []seg {
 		return []seg{{"✕ " + i18n.T("tui.needs_login"), st(p.crit)}}
 	case !a.Enabled:
 		return []seg{{i18n.T("tui.disabled"), p.dim}}
+	}
+	if end, ok := loginEnds(a); ok {
+		return []seg{{"! " + i18n.T("tui.login_ends", clock(end, now)), st(p.warn)}}
+	}
+	switch {
 	case a.Exhausted:
 		if a.FreeAt != nil && a.FreeAt.After(now) { // passed: the next check frees it
 			return []seg{{"✕ " + i18n.T("tui.out_until", clock(*a.FreeAt, now)), st(p.crit)}}
@@ -378,6 +424,8 @@ func (m *Model) glyph(a api.Account) seg {
 		return seg{"!", p.warn}
 	case !a.Enabled:
 		return seg{"○", p.dim}
+	case a.LoginEnding:
+		return seg{"!", p.warn}
 	}
 	return seg{" ", p.plain}
 }
@@ -471,6 +519,11 @@ func (m *Model) detail(w int, narrow bool, a api.Account, now time.Time) []strin
 	if a.Error != nil {
 		lines = append(lines, row{segs: []seg{{"! " + *a.Error, p.warn}}})
 	}
+	if end, ok := loginEnds(a); ok && a.Active {
+		lines = append(lines, row{segs: []seg{{"! " + i18n.T("tui.login_ends_claude", clock(end, now)), p.warn}}})
+	} else if ok {
+		lines = append(lines, row{segs: []seg{{"! " + i18n.T("tui.login_ends_run", clock(end, now), a.Name), p.warn}}})
+	}
 	lines = append(lines, row{})
 	lw, resetW := 15, 31
 	if narrow {
@@ -510,6 +563,9 @@ func (m *Model) detail(w int, narrow bool, a api.Account, now time.Time) []strin
 		at := a.CheckedAt.Local().Format("15:04:05")
 		lines = append(lines, row{segs: []seg{{i18n.T("tui.checked_at", at, ago(*a.CheckedAt, now)), p.dim}}})
 	}
+	if t := tokens(a, now, narrow); t != "" {
+		lines = append(lines, row{segs: []seg{{t, p.dim}}})
+	}
 	title := []seg{{a.Name, p.bold}}
 	if tag != nil {
 		title = append(title, seg{"  ", p.plain}, *tag)
@@ -528,6 +584,7 @@ func (m *Model) helpBox(w int) []string {
 		{"a", i18n.T("tui.help_auto")},
 		{"s", i18n.T("tui.help_strategy")},
 		{"r", i18n.T("tui.help_check")},
+		{"t", i18n.T("tui.help_token")},
 		{"l", i18n.T("tui.help_login")},
 		{"?  esc", i18n.T("tui.close_help")},
 		{"q", i18n.T("tui.quit")},

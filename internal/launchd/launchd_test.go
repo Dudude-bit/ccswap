@@ -11,7 +11,7 @@ import (
 )
 
 func TestPlistGolden(t *testing.T) {
-	for _, k := range []string{"CCSWAP_HOME", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "LC_ALL", "LC_MESSAGES", "LANG"} {
+	for _, k := range []string{"CCSWAP_HOME", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "LC_ALL", "LC_MESSAGES", "LANG", "CCSWAP_CLAUDE_BIN", "PATH"} {
 		t.Setenv(k, "")
 	}
 	got := string(Plist("/opt/a&b/ccswap", "/h/ome"))
@@ -53,6 +53,10 @@ func TestPlistGolden(t *testing.T) {
 	t.Setenv("https_proxy", "http://p:1")
 	if g := string(Plist("/b", "/x<y")); !strings.Contains(g, "<string>/x&lt;y</string>\n\t\t<key>https_proxy</key>\n\t\t<string>http://p:1</string>\n\t</dict>") {
 		t.Fatalf("proxy missing:\n%s", g)
+	}
+	t.Setenv("PATH", "/n/bin:/usr/bin:/bin") // the claude a login from the page runs, and its node
+	if g := string(Plist("/b", "/x<y")); !strings.Contains(g, "<key>PATH</key>\n\t\t<string>/n/bin:/usr/bin:/bin</string>\n\t</dict>") {
+		t.Fatalf("PATH missing:\n%s", g)
 	}
 }
 
