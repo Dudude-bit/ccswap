@@ -90,6 +90,7 @@ type Options struct {
 	LockPath string // one daemon per user, whatever CCSWAP_HOME says; default <config.DefaultHome>/daemon.lock
 	Version  string
 	Host     string
+	Bin      string // the binary the daemon runs, which an update replaces
 }
 
 // acctUsage is the daemon's memory of one account's limits.
@@ -132,9 +133,13 @@ type Daemon struct {
 	thr         atomic.Pointer[config.Thresholds]
 	bus         broadcast  // tells event streams that status or accounts may have changed
 	cfgMu       sync.Mutex // one config.toml rewrite at a time, so the file matches thr
+	updating    atomic.Bool
 
 	mu         sync.Mutex // guards everything below
 	runCtx     context.Context
+	cancel     context.CancelFunc // stops Run
+	restart    bool               // an update replaced the binary: Run returns ErrRestart
+	release    api.Release        // the newest release when it is newer than this build, as of the last ask
 	usage      map[string]*acctUsage
 	pending    map[string]pendingPair // rotated pairs whose save failed; saved before anything else
 	unknown    bool                   // the entry holds a login ccswap does not know
@@ -207,16 +212,20 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	defer release()
 	SweepLogins(d.o.Home, d.im.Target, d.o.KC)
+	parent := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	context.AfterFunc(ctx, d.bus.close)
 	d.mu.Lock()
-	d.runCtx = ctx
+	d.runCtx, d.cancel = ctx, cancel
 	d.mu.Unlock()
 	srv := make(chan error, 1)
 	go func() { srv <- serveAPI(ctx, ln, d) }()
 	if d.o.Config.T3.Enabled {
 		defer d.startHTTP(ctx, cancel)()
+	}
+	if d.o.Config.Update.Check {
+		go d.watchReleases(ctx)
 	}
 	t := time.NewTicker(d.o.Config.PollInterval)
 	defer t.Stop()
@@ -226,12 +235,15 @@ func (d *Daemon) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			err := <-srv
 			d.stop()
-			return err
+			return d.ended(parent, err)
 		case err := <-srv:
 			stopped := ctx.Err() != nil // the server stopped because Run was asked to: not a failure
 			cancel()
 			d.stop()
-			if err == nil && !stopped {
+			if stopped {
+				return d.ended(parent, err)
+			}
+			if err == nil {
 				err = errors.New("api server stopped")
 			}
 			return err
@@ -277,6 +289,17 @@ func (d *Daemon) startHTTP(ctx context.Context, cancel context.CancelFunc) func(
 		d.mu.Unlock()
 	}()
 	return func() { cancel(); <-done }
+}
+
+// ended is Run's error once it stopped as asked: ErrRestart when an update asked, and not a signal or the
+// caller, which stop the daemon whether or not an update is in place.
+func (d *Daemon) ended(parent context.Context, err error) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.restart && parent.Err() == nil {
+		return ErrRestart
+	}
+	return err
 }
 
 // stop waits for a tick an API request may still run (it may be saving rotated tokens), then
@@ -1502,7 +1525,7 @@ func (d *Daemon) Status(context.Context) (api.Status, error) {
 	s := api.Status{Version: d.o.Version, Host: d.o.Host, Active: st.Active, Auto: st.Auto, Strategy: api.Strategy(strategyOf(st)),
 		UnknownActive: unknown, TargetService: d.svc, LastPollAt: timePtr(last), LastActivityAt: timePtr(activity),
 		LastSwitchAt: timePtr(st.LastSwitchAt), Shifts: shifts(st.Holders, d.o.Now()),
-		Thresholds: thresholdsOf(d.th()), Remote: d.remoteStatus()}
+		Thresholds: thresholdsOf(d.th()), Remote: d.remoteStatus(), Update: d.newer()}
 	if listen != "" {
 		s.Listen = &listen
 	}

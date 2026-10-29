@@ -119,6 +119,14 @@ func (f *fakeCore) WebCode(context.Context) (api.WebCode, error) {
 	return api.WebCode{Code: "c0de"}, f.err
 }
 func (f *fakeCore) Version() string { return "v1.2.3" }
+func (f *fakeCore) InstallUpdate(context.Context) (api.Release, error) {
+	f.rec("update")
+	return api.Release{Version: "v1.2.4", Url: "https://github.com/Dudude-bit/ccswap/releases/tag/v1.2.4"}, f.err
+}
+func (f *fakeCore) Restart(_ context.Context, bin string) (api.Restart, error) {
+	f.rec("restart " + bin)
+	return api.Restart{Bin: bin, Restarting: true}, f.err
+}
 func (f *fakeCore) MigrateExport(_ context.Context, names []string) (api.MigrateExport, error) {
 	f.rec("migrate export")
 	f.names = names
@@ -245,7 +253,17 @@ func TestRoutesOverSocket(t *testing.T) {
 	if f.mimp.Bundle != "bundle" || f.mimp.Code != "c0de" || !f.mimp.Replace || len(mi.JSON200.Accounts) != 1 {
 		t.Fatalf("import %+v %+v", f.mimp, mi.JSON200)
 	}
-	if len(f.calls) != 15 || f.calls[13] != "migrate cancel t1k" {
+	up, _ := c.InstallUpdateWithResponse(ctx)
+	want(200, up.StatusCode())
+	if up.JSON200.Version != "v1.2.4" {
+		t.Fatalf("update %+v", up.JSON200)
+	}
+	rs, _ := c.RestartWithResponse(ctx, api.RestartRequest{Bin: "/b/ccswap"})
+	want(200, rs.StatusCode())
+	if !rs.JSON200.Restarting || f.calls[16] != "restart /b/ccswap" {
+		t.Fatalf("restart %+v %v", rs.JSON200, f.calls)
+	}
+	if len(f.calls) != 17 || f.calls[13] != "migrate cancel t1k" {
 		t.Fatalf("calls %v", f.calls)
 	}
 }
@@ -303,6 +321,9 @@ func TestErrorMapping(t *testing.T) {
 		{i18n.Err("daemon.migrate_name_taken", store.ErrDuplicate, "b", "b@x"), 409, "duplicate"},
 		{i18n.Err("daemon.migrate_spent", ErrBundleSpent, "b", "b"), 409, "bundle_spent"},
 		{i18n.Err("daemon.migrate_unchecked", ErrBundleUnchecked, "b"), 502, "bundle_unchecked"},
+		{ErrNoUpdate, 409, "no_update"},
+		{ErrUpdating, 409, "updating"},
+		{updateError{i18n.Err("update.github_status", 503)}, 502, "update_failed"},
 		{os.ErrPermission, 500, "internal"},
 	} {
 		c, e := classify(tc.err)
@@ -552,6 +573,7 @@ var (
 		{"PUT", "/v1/strategy", `{"strategy":"cache-aware"}`},
 		{"PUT", "/v1/thresholds", `{"five_hour":90,"seven_day":97,"hysteresis":5,"min_dwell_seconds":60}`},
 		{"POST", "/v1/refresh", ""},
+		{"POST", "/v1/update", ""},
 	}
 	socketRoutes = []route{
 		{"POST", "/v1/accounts", `{"name":"n","config_dir":"/tmp/x"}`},
@@ -560,6 +582,7 @@ var (
 		{"POST", "/v1/signal", `{"payload":{}}`},
 		{"PUT", "/v1/remote", `{"url":""}`},
 		{"POST", "/v1/web/code", ""},
+		{"POST", "/v1/restart", `{"bin":"/b"}`},
 	}
 )
 

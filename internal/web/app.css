@@ -243,9 +243,11 @@ a { color: inherit; text-underline-offset: 3px; }
 .strip { padding: 10px 14px; border-radius: 4px; border: 1px solid var(--line); background: var(--surface); }
 .strip.crit, .strip.msg { border-color: var(--crit); color: var(--crit); font-weight: 500; }
 .strip.warn { border-color: var(--edge); color: var(--ink); font-weight: 400; }
-.strip.fault { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 7px 7px 7px 14px; }
-.strip.fault .grow { flex: 1 1 280px; }
-.strip.fault a { color: inherit; padding: 0 8px; }
+.strip.fault, .strip.act { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 7px 7px 7px 14px; }
+.strip.act:not(:has(.btn)) { padding: 10px 14px; }
+.strip.fault .grow, .strip.act .grow { flex: 1 1 280px; }
+.strip.fault a, .strip.act a { color: inherit; padding: 0 8px; }
+.strip.act .spin { margin-right: -8px; }
 .note { font-size: 13px; color: var(--mut); }
 .note b, .note code { color: var(--ink); }
 

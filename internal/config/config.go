@@ -41,6 +41,9 @@ type Remote struct{ URL string }
 // UI is how ccswap talks: Lang is a pinned language's BCP 47 tag ("ru", "pt-BR"), or "" to follow the locale.
 type UI struct{ Lang string }
 
+// Update: Check has the daemon ask GitHub for ccswap's newest release.
+type Update struct{ Check bool }
+
 type Config struct {
 	PollInterval time.Duration
 	Thresholds   Thresholds
@@ -48,6 +51,7 @@ type Config struct {
 	Claude       Claude
 	Remote       Remote
 	UI           UI
+	Update       Update
 }
 
 // DefaultHome is the app dir without $CCSWAP_HOME: ~/Library/Application Support/ccswap on macOS,
@@ -115,6 +119,9 @@ type file struct {
 	UI struct {
 		Lang string `toml:"lang"`
 	} `toml:"ui"`
+	Update struct {
+		Check bool `toml:"check"`
+	} `toml:"update"`
 }
 
 func Load(home string) (Config, error) {
@@ -122,6 +129,7 @@ func Load(home string) (Config, error) {
 	f.Thresholds.FiveHour, f.Thresholds.Weekly, f.Thresholds.Hysteresis, f.Thresholds.MinDwell = 95, 98, 10, "10m"
 	f.Thresholds.CheckActive, f.Thresholds.CheckOthers = "5m", "30m"
 	f.T3.Enabled, f.T3.Listen = true, "127.0.0.1:8318"
+	f.Update.Check = true
 
 	b, err := os.ReadFile(filepath.Join(home, "config.toml"))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -183,6 +191,7 @@ func Load(home string) (Config, error) {
 		Claude:       Claude{f.Claude.ConfigDir},
 		Remote:       Remote{f.Remote.URL},
 		UI:           UI{f.UI.Lang},
+		Update:       Update{f.Update.Check},
 	}, nil
 }
 

@@ -354,6 +354,9 @@ func newStatusCmd() *cobra.Command {
 			if s.UnknownActive {
 				fmt.Fprintln(out, i18n.T("status.unknown_active"))
 			}
+			if s.Update != nil {
+				fmt.Fprintf(out, i18n.T("status.update"), s.Update.Version, s.Version)
+			}
 			return nil
 		},
 	}
