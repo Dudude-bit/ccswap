@@ -89,13 +89,14 @@ const where = () => state.status?.host || t('host.any');
 // and timeout. Any other code reads e.other.
 const ERR_CODES = ['offline', 'timeout', 'unknown_active', 'internal', 'entry_expired', 'entry_changed', 'cannot_identify',
   'invalid_thresholds', 'target_refreshing', 'not_found', 'needs_login', 'read_only', 'local_only', 'bad_code', 'migrating',
-  'claude_owns', 'refresh_failed', 'active_account', 'code_refused', 'login_gone', 'wrong_account', 'login_failed', 'login_pending'];
+  'claude_owns', 'refresh_failed', 'active_account', 'code_refused', 'login_gone', 'wrong_account', 'login_failed', 'login_pending',
+  'login_cooldown'];
 
 const errArgs = (e, name) => ({
   cannot_identify: [e.message], invalid_thresholds: [e.message], target_refreshing: [name], not_found: [name],
   needs_login: [name, where()], migrating: [name], claude_owns: [name], active_account: [name, where()],
   wrong_account: [state.accounts?.find((a) => a.name === name)?.email || name], login_failed: [where(), e.message],
-  login_pending: [name],
+  login_pending: [name], login_cooldown: [name],
 }[e.code] ?? [where()]);
 
 function describe(e, name = '<name>') {

@@ -27,8 +27,11 @@ import (
 
 var (
 	loginTTL = 10 * time.Minute // a link with no code by then is dropped and its claude stopped
-	linkWait = 30 * time.Second // for claude to print its link
-	codeWait = 45 * time.Second // for claude to trade the code, under the page's 60 s
+	// a start that cannot replace a link (the read key) waits this long after the account's last start:
+	// each start runs a claude that may open a browser tab on this machine
+	loginCooldown = 30 * time.Second
+	linkWait      = 30 * time.Second // for claude to print its link
+	codeWait      = 45 * time.Second // for claude to trade the code, under the page's 60 s
 )
 
 var linkRe = regexp.MustCompile(`https://\S+/oauth/authorize\?\S+`)
@@ -46,6 +49,8 @@ var (
 	ErrWrongAccount = errors.New("another account's login")
 	// ErrLoginPending: a link of the account waits for its code, and the caller may not replace it.
 	ErrLoginPending = errors.New("a login of the account is pending")
+	// ErrLoginCooldown: the account's last start was under loginCooldown ago, and the caller may not replace.
+	ErrLoginCooldown = errors.New("a login of the account started moments ago")
 )
 
 // pendingLogin is a `claude auth login` waiting for its code.
@@ -72,7 +77,8 @@ func (p *pendingLogin) said() string {
 func loginFailed(detail string) error { return i18n.Err("daemon.login_failed", ErrLoginFailed, detail) }
 
 // StartLogin runs `claude auth login` for name and returns its link. A link of name that waits for its code
-// makes it ErrLoginPending, unless replace: the new link then replaces it once it is up.
+// makes it ErrLoginPending, unless replace: the new link then replaces it once it is up. Without replace, a
+// start under loginCooldown after name's last one is ErrLoginCooldown.
 func (d *Daemon) StartLogin(ctx context.Context, name string, replace bool) (api.LoginLink, error) {
 	st := d.o.Store.State()
 	if _, ok := st.Find(name); !ok {
@@ -85,15 +91,25 @@ func (d *Daemon) StartLogin(ctx context.Context, name string, replace bool) (api
 	p := &pendingLogin{id: rand.Text(), expires: d.o.Now().Add(loginTTL), stop: stop, done: make(chan struct{})}
 	// with no link waiting, p holds the account's slot before claude starts: a claude that quits at once
 	// finds it to drop, and a second start spawns no claude
+	now := d.o.Now()
+	var refused error
 	d.mu.Lock()
-	prev := d.logins[name]
-	if prev == nil {
-		d.logins[name] = p
+	prev, u := d.logins[name], d.acct(name)
+	switch {
+	case prev != nil && !replace:
+		refused = i18n.Err("daemon.login_pending", ErrLoginPending, name, clockText(prev.expires, now))
+	case !replace && now.Sub(u.loginStarted) < loginCooldown:
+		refused = i18n.Err("daemon.login_cooldown", ErrLoginCooldown, name, u.loginStarted.Add(loginCooldown).Local().Format("15:04:05"))
+	default:
+		u.loginStarted = now
+		if prev == nil {
+			d.logins[name] = p
+		}
 	}
 	d.mu.Unlock()
-	if prev != nil && !replace {
+	if refused != nil {
 		stop()
-		return api.LoginLink{}, i18n.Err("daemon.login_pending", ErrLoginPending, name, clockText(prev.expires, d.o.Now()))
+		return api.LoginLink{}, refused
 	}
 	dir, err := os.MkdirTemp(d.o.Home, "login-*")
 	if err != nil {

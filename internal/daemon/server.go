@@ -266,6 +266,8 @@ func classify(err error) (int, api.Error) {
 		return 409, api.Error{Code: "wrong_account", Message: err.Error()}
 	case errors.Is(err, ErrLoginPending):
 		return 409, api.Error{Code: "login_pending", Message: err.Error()}
+	case errors.Is(err, ErrLoginCooldown):
+		return 429, api.Error{Code: "login_cooldown", Message: err.Error()}
 	case errors.Is(err, switcher.ErrNearRefresh):
 		return 409, api.Error{Code: "near_refresh", Message: err.Error()}
 	case errors.Is(err, switcher.ErrTargetRefreshing):

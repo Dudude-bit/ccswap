@@ -131,6 +131,8 @@ type Error struct {
 	// whether the accounts are still here), export_done (migrate cancel: the export is committed already),
 	// tokens_changed (migrate commit: a login changed since packing; the export is cancelled),
 	// bundle_spent (migrate import with replace: the bundle's login was used already; nothing is imported);
+	// 429 login_cooldown (login: a start that cannot replace a link, under 30 seconds after the account's last one;
+	// the message says when one is taken again);
 	// 500 internal;
 	// 502 bundle_unchecked (migrate import with replace: the bundle's login was not refreshed, as Anthropic failed or
 	// no time was left; nothing is imported, try again), refresh_failed (refresh login: Anthropic did not answer or
@@ -560,7 +562,7 @@ type ClientInterface interface {
 
 	// StartLogin performs a POST /v1/accounts/{name}/login (the `StartLogin` operationId) request.
 	//
-	// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints and the link's id. Signing in there shows a code, which /v1/accounts/{name}/login/code takes with the id. Signing in on the daemon's machine, in the browser tab claude opens, finishes the login without a code. One link per account: while one waits for its code, a new one is refused (login_pending), except on the unix socket and to the admin key, whose new link replaces it once it is up. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login, and only as a new login of an account here.
+	// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints and the link's id. Signing in there shows a code, which /v1/accounts/{name}/login/code takes with the id. Signing in on the daemon's machine, in the browser tab claude opens, finishes the login without a code. One link per account: while one waits for its code, a new one is refused (login_pending), except on the unix socket and to the admin key, whose new link replaces it once it is up. Without those, a start under 30 seconds after the account's last one is refused too (429 login_cooldown), as each runs a claude that may open a browser tab on the daemon's machine. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login, and only as a new login of an account here.
 	StartLogin(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// FinishLoginWithBody performs a POST /v1/accounts/{name}/login/code (the `FinishLogin` operationId) request,
@@ -871,7 +873,7 @@ func (c *Client) CancelLogin(ctx context.Context, name string, params *CancelLog
 
 // StartLogin performs a POST /v1/accounts/{name}/login (the `StartLogin` operationId) request.
 //
-// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints and the link's id. Signing in there shows a code, which /v1/accounts/{name}/login/code takes with the id. Signing in on the daemon's machine, in the browser tab claude opens, finishes the login without a code. One link per account: while one waits for its code, a new one is refused (login_pending), except on the unix socket and to the admin key, whose new link replaces it once it is up. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login, and only as a new login of an account here.
+// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints and the link's id. Signing in there shows a code, which /v1/accounts/{name}/login/code takes with the id. Signing in on the daemon's machine, in the browser tab claude opens, finishes the login without a code. One link per account: while one waits for its code, a new one is refused (login_pending), except on the unix socket and to the admin key, whose new link replaces it once it is up. Without those, a start under 30 seconds after the account's last one is refused too (429 login_cooldown), as each runs a claude that may open a browser tab on the daemon's machine. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login, and only as a new login of an account here.
 func (c *Client) StartLogin(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewStartLoginRequest(c.Server, name)
 	if err != nil {
@@ -2467,7 +2469,7 @@ type ClientWithResponsesInterface interface {
 
 	// StartLoginWithResponse performs a POST /v1/accounts/{name}/login (the `StartLogin` operationId) request.
 	//
-	// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints and the link's id. Signing in there shows a code, which /v1/accounts/{name}/login/code takes with the id. Signing in on the daemon's machine, in the browser tab claude opens, finishes the login without a code. One link per account: while one waits for its code, a new one is refused (login_pending), except on the unix socket and to the admin key, whose new link replaces it once it is up. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login, and only as a new login of an account here.
+	// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints and the link's id. Signing in there shows a code, which /v1/accounts/{name}/login/code takes with the id. Signing in on the daemon's machine, in the browser tab claude opens, finishes the login without a code. One link per account: while one waits for its code, a new one is refused (login_pending), except on the unix socket and to the admin key, whose new link replaces it once it is up. Without those, a start under 30 seconds after the account's last one is refused too (429 login_cooldown), as each runs a claude that may open a browser tab on the daemon's machine. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login, and only as a new login of an account here.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	StartLoginWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*StartLoginResponse, error)
@@ -3083,6 +3085,8 @@ type StartLoginResponse struct {
 	JSON404 *Error
 	// JSON409 the response for an HTTP 409 `application/json` response
 	JSON409 *Error
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *Error
 	// JSON500 the response for an HTTP 500 `application/json` response
 	JSON500 *Error
 	// JSON502 the response for an HTTP 502 `application/json` response
@@ -3102,6 +3106,11 @@ func (r StartLoginResponse) GetJSON404() *Error {
 // GetJSON409 returns the response for an HTTP 409 `application/json` response
 func (r StartLoginResponse) GetJSON409() *Error {
 	return r.JSON409
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r StartLoginResponse) GetJSON429() *Error {
+	return r.JSON429
 }
 
 // GetJSON500 returns the response for an HTTP 500 `application/json` response
@@ -4264,7 +4273,7 @@ func (c *ClientWithResponses) CancelLoginWithResponse(ctx context.Context, name 
 
 // StartLoginWithResponse performs a POST /v1/accounts/{name}/login (the `StartLogin` operationId) request.
 //
-// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints and the link's id. Signing in there shows a code, which /v1/accounts/{name}/login/code takes with the id. Signing in on the daemon's machine, in the browser tab claude opens, finishes the login without a code. One link per account: while one waits for its code, a new one is refused (login_pending), except on the unix socket and to the admin key, whose new link replaces it once it is up. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login, and only as a new login of an account here.
+// Start a new login of the account, as ccswap login does: the daemon runs claude auth login and answers with the sign-in link it prints and the link's id. Signing in there shows a code, which /v1/accounts/{name}/login/code takes with the id. Signing in on the daemon's machine, in the browser tab claude opens, finishes the login without a code. One link per account: while one waits for its code, a new one is refused (login_pending), except on the unix socket and to the admin key, whose new link replaces it once it is up. Without those, a start under 30 seconds after the account's last one is refused too (429 login_cooldown), as each runs a claude that may open a browser tab on the daemon's machine. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews. The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the login, and only as a new login of an account here.
 //
 // Returns a wrapper object for the known response body format(s).
 func (c *ClientWithResponses) StartLoginWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*StartLoginResponse, error) {
@@ -4991,6 +5000,13 @@ func ParseStartLoginResponse(rsp *http.Response) (*StartLoginResponse, error) {
 			return nil, err
 		}
 		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest Error
@@ -6893,6 +6909,15 @@ func (response StartLogin409JSONResponse) VisitStartLoginResponse(ctx fiber.Ctx)
 	return ctx.JSON(&response)
 }
 
+type StartLogin429JSONResponse Error
+
+func (response StartLogin429JSONResponse) VisitStartLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(429)
+
+	return ctx.JSON(&response)
+}
+
 type StartLogin500JSONResponse Error
 
 func (response StartLogin500JSONResponse) VisitStartLoginResponse(ctx fiber.Ctx) error {
@@ -8517,117 +8542,119 @@ func (sh *strictHandler) OpenWebSession(ctx fiber.Ctx) error {
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

@@ -259,7 +259,7 @@ web page, part of the API and the T3 Code hub:
 | `GET /v1/status`, `GET /v1/accounts`, `GET /v1/events` | the read key or the admin key |
 | `PATCH /v1/accounts/{name}`, `POST /v1/accounts/{name}/activate` (never forced), `PUT /v1/auto`, `PUT /v1/strategy`, `PUT /v1/thresholds`, `POST /v1/refresh`, `POST /v1/accounts/{name}/refresh` | the admin key, a listener on a loopback address, and a `Host` that names a loopback address or `localhost` |
 | `POST /v1/web/session`: trades a one-time code from `ccswap web` for the admin key | the code, a loopback listener and a loopback `Host` |
-| `POST /v1/accounts/{name}/login`, `POST /v1/accounts/{name}/login/code`, `DELETE /v1/accounts/{name}/login?id=…`: an account's new login from the page | the read key or the admin key, on any listener and `Host`; replacing a link that waits for its code, the admin key |
+| `POST /v1/accounts/{name}/login`, `POST /v1/accounts/{name}/login/code`, `DELETE /v1/accounts/{name}/login?id=…`: an account's new login from the page | the read key or the admin key, on any listener and `Host`; replacing a link that waits for its code, or starting one within 30 seconds of the account's last start, the admin key |
 | `GET /v0/management/auth-files`, `POST /v0/management/api-call`, `POST /v0/management/reset-quota`: the part of CLIProxyAPI's management API T3 Code reads | the read key or the admin key |
 
 Everything else, such as adding and removing accounts, a forced switch, the hook signal, `remote`,
@@ -276,7 +276,9 @@ one removed meanwhile is not added back (`404 not_found`). Signing in on the dae
 browser tab claude opens, ends claude by itself: its login is stored the same way, with no code. A link
 takes one code: a refused one (`400 code_refused`) spends it, as it spends claude's sign-in. A link
 waits 10 minutes, one per account: while it does, a new one gets `409 login_pending`, except on the
-socket and with the admin key, whose new link replaces it once that one is up. `DELETE` with its id, its
+socket and with the admin key, whose new link replaces it once that one is up. Without those, a start
+under 30 seconds after the account's last one gets `429 login_cooldown`, whose message says when one is
+taken again: each start runs a claude that may open a browser tab on the daemon's machine. `DELETE` with its id, its
 replacement or a daemon restart stops its claude and drops its folder, and a code for it then gets `409
 login_gone`, as does a code with another id. Claude did not start or gave no link: `502 login_failed`.
 The account Claude Code uses is refused (`409 active_account`), as its login is Claude Code's to renew.

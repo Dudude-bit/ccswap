@@ -114,6 +114,7 @@ type acctUsage struct {
 	token, login       time.Time        // when the login's access and refresh tokens run out, as last read; zero = unknown
 	refreshed          time.Time        // the last refresh ccswap made of the login
 	announced          time.Time        // the login end last announced as near
+	loginStarted       time.Time        // the last start of a login from the page
 }
 
 // pendingPair is a rotated pair not yet in the vault and the consumed refresh token it replaces.

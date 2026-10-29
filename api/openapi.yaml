@@ -108,14 +108,16 @@ paths:
         sign-in link it prints and the link's id. Signing in there shows a code, which /v1/accounts/{name}/login/code
         takes with the id. Signing in on the daemon's machine, in the browser tab claude opens, finishes the login
         without a code. One link per account: while one waits for its code, a new one is refused (login_pending), except
-        on the unix socket and to the admin key, whose new link replaces it once it is up. A link not used within 10
-        minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews.
+        on the unix socket and to the admin key, whose new link replaces it once it is up. Without those, a start
+        under 30 seconds after the account's last one is refused too (429 login_cooldown), as each runs a claude that
+        may open a browser tab on the daemon's machine. A link not used within 10 minutes is dropped. Never the account Claude Code uses (active_account), whose login only Claude Code renews.
         The TCP listener takes the read key here on any address, as only the account's own sign-in can finish the
         login, and only as a new login of an account here.
       responses:
         "200": {description: The sign-in link, content: {application/json: {schema: {$ref: "#/components/schemas/LoginLink"}}}}
         "404": {$ref: "#/components/responses/Error"}
         "409": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
         "500": {$ref: "#/components/responses/Error"}
         "502": {$ref: "#/components/responses/Error"}
     delete:
@@ -371,6 +373,8 @@ components:
             whether the accounts are still here), export_done (migrate cancel: the export is committed already),
             tokens_changed (migrate commit: a login changed since packing; the export is cancelled),
             bundle_spent (migrate import with replace: the bundle's login was used already; nothing is imported);
+            429 login_cooldown (login: a start that cannot replace a link, under 30 seconds after the account's last one;
+            the message says when one is taken again);
             500 internal;
             502 bundle_unchecked (migrate import with replace: the bundle's login was not refreshed, as Anthropic failed or
             no time was left; nothing is imported, try again), refresh_failed (refresh login: Anthropic did not answer or

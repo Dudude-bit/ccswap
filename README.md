@@ -343,7 +343,8 @@ redirects there); `[t3] enabled = false` turns it off. Two keys guard it:
 - **The read key**, the one `ccswap t3` prints. Logged in with it, the page only shows, and logs an
   account in again: that works anywhere, as the daemon keeps a login only as a new one of an account
   here with its email, so nobody can finish one without signing in as that account. It cannot replace a
-  login another page started while that one waits for its code. "Remember the key on this device" keeps
+  login another page started while that one waits for its code, and starts one per account every 30
+  seconds at most. "Remember the key on this device" keeps
   it after the tab closes.
 - **The admin key** changes settings. It is never printed and never put in a link: `ccswap web` asks the
   daemon for a one-time code (single use, valid for a minute) and opens `…/management.html#code=…`. The

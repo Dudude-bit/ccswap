@@ -55,7 +55,7 @@ func startLogin(t *testing.T, e *tenv) (api.LoginLink, string) {
 		t.Fatal(err)
 	}
 	u, err := url.Parse(l.Url)
-	if err != nil || u.Host != "claude.example" || !l.ExpiresAt.Equal(t0.Add(loginTTL)) || l.Id == "" {
+	if err != nil || u.Host != "claude.example" || !l.ExpiresAt.Equal(e.clk.Now().Add(loginTTL)) || l.Id == "" {
 		t.Fatalf("link %+v %v", l, err)
 	}
 	dir := u.Query().Get("dir")
@@ -190,17 +190,20 @@ func TestLoginRefusals(t *testing.T) {
 	}
 
 	t.Setenv("CCSWAP_CLAUDE_BIN", filepath.Join(t.TempDir(), "none"))
+	e.clk.Add(loginCooldown)
 	if _, err := e.d.StartLogin(ctx, "b", false); !errors.Is(err, ErrLoginFailed) {
 		t.Errorf("no claude: %v", err)
 	}
 	t.Setenv("CCSWAP_CLAUDE_BIN", "")
 	t.Setenv("PATH", t.TempDir())
+	e.clk.Add(loginCooldown)
 	if _, err := e.d.StartLogin(ctx, "b", false); !errors.Is(err, ErrLoginFailed) || !strings.Contains(err.Error(), i18n.T("daemon.claude_not_found")) {
 		t.Errorf("no claude in PATH: %v", err)
 	}
 	quits := filepath.Join(t.TempDir(), "claude")
 	os.WriteFile(quits, []byte("#!/bin/sh\necho 'Not logged in: network unreachable'\nexit 1\n"), 0o755)
 	t.Setenv("CCSWAP_CLAUDE_BIN", quits)
+	e.clk.Add(loginCooldown)
 	if _, err := e.d.StartLogin(ctx, "b", false); !errors.Is(err, ErrLoginFailed) || !strings.Contains(err.Error(), "network unreachable") {
 		t.Errorf("no link: %v", err)
 	}
@@ -275,9 +278,45 @@ func TestLoginLinkEnds(t *testing.T) {
 	old := loginTTL
 	loginTTL = 300 * time.Millisecond
 	t.Cleanup(func() { loginTTL = old })
+	e.clk.Add(loginCooldown)
 	l, dir = startLogin(t, e)
 	gone(t, dir)
 	if _, err := e.d.FinishLogin(ctx, "b", l.Id, "C1#S1"); !errors.Is(err, ErrLoginGone) {
 		t.Fatalf("expired: %v", err)
 	}
+}
+
+// TestLoginStartCooldown: a start that cannot replace a link (the read key) comes loginCooldown after the
+// account's last one at the soonest, so start, a bad code and start again cannot open browser tabs on the
+// owner's machine in a loop. The admin key and the unix socket are not held back.
+func TestLoginStartCooldown(t *testing.T) {
+	e := newTenv(t)
+	fakeClaude(t, e)
+	ctx := context.Background()
+	l, _ := startLogin(t, e)
+	if _, err := e.d.FinishLogin(ctx, "b", l.Id, "C9#S9"); !errors.Is(err, ErrCodeRefused) {
+		t.Fatal(err)
+	}
+	e.clk.Add(loginCooldown - time.Second)
+	_, err := e.d.StartLogin(ctx, "b", false)
+	if want := t0.Add(loginCooldown).Local().Format("15:04:05"); !errors.Is(err, ErrLoginCooldown) || !strings.Contains(err.Error(), want) {
+		t.Fatalf("a start %v after the last: %v", loginCooldown-time.Second, err)
+	}
+	if ds, _ := filepath.Glob(filepath.Join(e.home, "login-*")); len(ds) != 0 {
+		t.Fatalf("a refused start ran claude: %v", ds)
+	}
+	if code, body := classify(err); code != 429 || body.Code != "login_cooldown" {
+		t.Fatalf("classified %d %s", code, body.Code)
+	}
+	l, err = e.d.StartLogin(ctx, "b", true)
+	if err != nil {
+		t.Fatal("the admin key is held back:", err)
+	}
+	e.d.CancelLogin(ctx, "b", l.Id)
+	e.clk.Add(loginCooldown - time.Second) // counted from the admin key's start
+	if _, err := e.d.StartLogin(ctx, "b", false); !errors.Is(err, ErrLoginCooldown) {
+		t.Fatalf("a start right after the admin key's: %v", err)
+	}
+	e.clk.Add(time.Second)
+	startLogin(t, e)
 }
