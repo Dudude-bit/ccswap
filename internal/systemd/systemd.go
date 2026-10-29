@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/Dudude-bit/ccswap/internal/atomicfile"
@@ -96,11 +97,16 @@ func quote(s string, dollar bool) string {
 const alreadyRunning, exConfig = 3, 78
 
 // service is what a unit keeps when this version rewrites it: the program, the language of its description,
-// its log and its environment (KEY=value).
+// its log and its environment (KEY=value). edited marks a unit with settings ccswap never writes.
 type service struct {
 	bin, desc, log string
 	env            []string
+	edited         bool
 }
+
+// ours are the settings some version of ccswap writes in its unit.
+var ours = []string{"Description", "ExecStart", "Restart", "RestartPreventExitStatus", "RestartSec", "KillSignal",
+	"TimeoutStopSec", "StandardOutput", "StandardError", "Environment", "WantedBy"}
 
 // Unit pins CCSWAP_HOME: the user manager's XDG_CONFIG_HOME may differ from the installing shell's.
 func Unit(binPath, home string) []byte {
@@ -126,22 +132,29 @@ func (s service) unit() []byte {
 	return b.Bytes()
 }
 
-// word is the first systemd word of v, unquoted; % and $ stay doubled.
-func word(v string) string {
-	if !strings.HasPrefix(v, `"`) {
-		if f := strings.Fields(v); len(f) > 0 {
-			return f[0]
+// words are the systemd words of v, unquoted; % and $ stay doubled.
+func words(v string) []string {
+	var out []string
+	for v = strings.TrimLeft(v, " \t"); v != ""; v = strings.TrimLeft(v, " \t") {
+		if v[0] != '"' {
+			i := strings.IndexAny(v, " \t")
+			if i < 0 {
+				i = len(v)
+			}
+			out, v = append(out, v[:i]), v[i:]
+			continue
 		}
-		return ""
-	}
-	var w strings.Builder
-	for i := 1; i < len(v) && v[i] != '"'; i++ {
-		if v[i] == '\\' && i+1 < len(v) {
-			i++
+		var w strings.Builder
+		i := 1
+		for ; i < len(v) && v[i] != '"'; i++ {
+			if v[i] == '\\' && i+1 < len(v) {
+				i++
+			}
+			w.WriteByte(v[i])
 		}
-		w.WriteByte(v[i])
+		out, v = append(out, w.String()), v[min(i+1, len(v)):]
 	}
-	return w.String()
+	return out
 }
 
 // parse reads back the service a unit describes.
@@ -154,11 +167,20 @@ func parse(b []byte) service {
 		case "Description":
 			s.desc = v
 		case "ExecStart":
-			s.bin = strings.NewReplacer("%%", "%", "$$", "$").Replace(word(v))
+			if w := words(v); len(w) > 0 {
+				s.bin = strings.NewReplacer("%%", "%", "$$", "$").Replace(w[0])
+			}
 		case "StandardOutput":
 			s.log = pct.Replace(strings.TrimPrefix(v, "append:"))
-		case "Environment":
-			s.env = append(s.env, pct.Replace(word(v)))
+		case "Environment": // one line may set several
+			for _, w := range words(v) {
+				s.env = append(s.env, pct.Replace(w))
+			}
+		}
+		switch t := strings.TrimSpace(l); {
+		case t == "", t[0] == '#', t[0] == ';', t == "[Unit]", t == "[Service]", t == "[Install]", slices.Contains(ours, k):
+		default:
+			s.edited = true
 		}
 	}
 	return s
@@ -197,7 +219,7 @@ func ProgramPath() (string, error) {
 }
 
 // Refresh rewrites the installed unit as this version writes it when it runs bin, keeping its program,
-// description, log and environment, and reports whether it did. Nothing is restarted: after daemon-reload
+// description, log and environment, and reports whether it did. A unit edited beyond that stays as it is. Nothing is restarted: after daemon-reload
 // the new unit takes effect at the service's next start.
 func Refresh(bin string) (bool, error) {
 	p, err := unitPath()
@@ -213,7 +235,7 @@ func Refresh(bin string) (bool, error) {
 	}
 	s := parse(b)
 	want := s.unit()
-	if s.bin != bin || bytes.Equal(want, b) {
+	if s.bin != bin || s.edited || bytes.Equal(want, b) {
 		return false, nil
 	}
 	if err := atomicfile.Write(p, want, 0o600); err != nil {

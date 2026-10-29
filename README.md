@@ -352,7 +352,8 @@ the same file. A page that only looks shows the command to run instead.
 
 As it starts, the daemon rewrites its service's definition (the LaunchAgent or the systemd unit) when it
 runs this daemon's binary and an update changed what `ccswap daemon install` writes. It keeps the binary,
-the log, and the environment in the file, so the proxy and the locale stay, and it restarts nothing:
+the log, and the environment in the file, so the proxy and the locale stay; a file with settings ccswap
+never writes (one you edited) stays as it is. It restarts nothing:
 launchd reads the new definition at your next login or `ccswap daemon install`, systemd (after the
 `daemon-reload` the daemon runs) at the service's next start.
 

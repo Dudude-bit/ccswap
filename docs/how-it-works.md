@@ -287,7 +287,8 @@ installed with, such as a proxy, stays.
 
 A release may change what `ccswap daemon install` writes. So as the daemon starts, it reads its service's
 definition and, when that runs its own binary, rewrites it as this version writes it, with the binary, the
-log and the environment the file has (and, for systemd, its description). It never stops or reloads its
+log and the environment the file has (and, for systemd, its description). A file with keys no ccswap
+version writes was edited by hand and stays as it is. It never stops or reloads its
 job: launchd reads the plist at the next bootstrap (a login, or `ccswap daemon install`); for systemd it
 runs `systemctl --user daemon-reload`, and the unit takes effect at the service's next start. The hook
 needs no such care: it is the binary's path, which an update keeps.

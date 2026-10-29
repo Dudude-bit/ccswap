@@ -160,6 +160,14 @@ func TestRefreshKeepsWhatThePlistHas(t *testing.T) {
 	if ok, err := Refresh("/opt/a&b/ccswap"); ok || err != nil {
 		t.Fatal("up to date:", ok, err)
 	}
+	edited := strings.Replace(old, "\t<key>RunAtLoad</key>", "\t<key>Nice</key>\n\t<integer>10</integer>\n\t<key>RunAtLoad</key>", 1)
+	os.WriteFile(plist, []byte(edited), 0o600)
+	if ok, err := Refresh("/opt/a&b/ccswap"); ok || err != nil {
+		t.Fatal("a plist with a key ccswap never writes:", ok, err)
+	}
+	if b, _ := os.ReadFile(plist); string(b) != edited {
+		t.Fatal("rewrote an edited plist:\n" + string(b))
+	}
 	if len(calls) != 0 {
 		t.Fatalf("launchctl %q", calls)
 	}

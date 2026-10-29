@@ -245,7 +245,7 @@ func TestRefreshKeepsWhatTheUnitHas(t *testing.T) {
 	t.Setenv("https_proxy", "http://p:1")
 	t.Setenv("LANG", "ru_RU.UTF-8")
 	cur := strings.Replace(string(Unit(`/opt/a b/50%/ccswap`, "/h 50%")), "Description="+i18n.T("systemd.unit_description"), "Description=ccswap, as said in Russian", 1)
-	cur = strings.Replace(cur, "\n\n[Install]", "\nEnvironment=\"SSL_CERT_FILE=/c a\"\n\n[Install]", 1) // added by hand
+	cur = strings.Replace(cur, "\n\n[Install]", "\nEnvironment=\"SSL_CERT_FILE=/c a\" A=1\n\n[Install]", 1) // added by hand, two on a line
 	old := strings.Replace(cur, "RestartPreventExitStatus=3 78\n", "", 1)
 	for _, k := range envKeys {
 		t.Setenv(k, "") // the daemon's environment is not the installing shell's
@@ -257,8 +257,9 @@ func TestRefreshKeepsWhatTheUnitHas(t *testing.T) {
 	if ok, err := Refresh(`/opt/a b/50%/ccswap`); !ok || err != nil {
 		t.Fatal(ok, err)
 	}
-	if b, _ := os.ReadFile(unit); string(b) != cur {
-		t.Fatalf("got:\n%s\nwant:\n%s", b, cur)
+	want := strings.Replace(cur, "Environment=\"SSL_CERT_FILE=/c a\" A=1\n", "Environment=\"SSL_CERT_FILE=/c a\"\nEnvironment=A=1\n", 1)
+	if b, _ := os.ReadFile(unit); string(b) != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", b, want)
 	}
 	if strings.Join(*calls, "|") != "systemctl --user daemon-reload" {
 		t.Fatalf("calls %q", *calls)
@@ -266,5 +267,13 @@ func TestRefreshKeepsWhatTheUnitHas(t *testing.T) {
 	*calls = nil
 	if ok, err := Refresh(`/opt/a b/50%/ccswap`); ok || err != nil || len(*calls) != 0 {
 		t.Fatal("up to date:", ok, err, *calls)
+	}
+	edited := strings.Replace(old, "[Service]\n", "[Service]\nNice=10\n", 1)
+	os.WriteFile(unit, []byte(edited), 0o600)
+	if ok, err := Refresh(`/opt/a b/50%/ccswap`); ok || err != nil {
+		t.Fatal("a unit with a setting ccswap never writes:", ok, err)
+	}
+	if b, _ := os.ReadFile(unit); string(b) != edited {
+		t.Fatal("rewrote an edited unit:\n" + string(b))
 	}
 }

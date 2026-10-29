@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -44,10 +45,16 @@ func esc(s string) string {
 }
 
 // job is what a LaunchAgent keeps when this version rewrites it: the program, its log and its environment.
+// edited marks a plist with keys ccswap never writes.
 type job struct {
 	bin, log string
 	env      [][2]string
+	edited   bool
 }
+
+// ours are the keys some version of ccswap writes in its plist.
+var ours = []string{"Label", "ProgramArguments", "RunAtLoad", "KeepAlive", "StandardOutPath", "StandardErrorPath",
+	"ExitTimeOut", "ProcessType", "EnvironmentVariables"}
 
 func Plist(binPath, home string) []byte {
 	j := job{bin: binPath, log: filepath.Join(home, "daemon.log")}
@@ -118,6 +125,7 @@ func parse(b []byte) (job, error) {
 			switch v := string(t); strings.Join(open, "/") {
 			case "plist/dict/key":
 				key = v
+				j.edited = j.edited || !slices.Contains(ours, v)
 			case "plist/dict/string":
 				if key == "StandardOutPath" {
 					j.log = v
@@ -171,8 +179,9 @@ func ProgramPath() (string, error) {
 }
 
 // Refresh rewrites the installed LaunchAgent as this version writes it when it runs bin, keeping its
-// program, log and environment, and reports whether it did. Nothing is loaded or stopped: launchd reads
-// the file when the job is next bootstrapped, at a login or by ccswap daemon install.
+// program, log and environment, and reports whether it did; a plist edited beyond that stays as it is.
+// Nothing is loaded or stopped: launchd reads the file when the job is next bootstrapped, at a login or
+// by ccswap daemon install.
 func Refresh(bin string) (bool, error) {
 	p, err := plistPath()
 	if err != nil {
@@ -190,7 +199,7 @@ func Refresh(bin string) (bool, error) {
 		return false, fmt.Errorf("%s: %w", p, err)
 	}
 	want := j.plist()
-	if j.bin != bin || bytes.Equal(want, b) {
+	if j.bin != bin || j.edited || bytes.Equal(want, b) {
 		return false, nil
 	}
 	if err := atomicfile.Write(p, want, 0o600); err != nil {
