@@ -108,7 +108,8 @@ GitHub, over HTTPS:
     account, and the sign-in's PKCE verifier never leaves the daemon's claude, so a key holder can start
     such a login and cancel the one it started, but only the account's owner can finish it, and an
     intercepted code works nowhere else. While a link waits for its code, the read key gets no other one
-    for that account (one `claude` at a time) and cannot cancel it; only the admin key replaces it. The
+    for that account (one `claude` at a time), and without that link's id it cannot cancel or finish it;
+    only the admin key replaces it. The
     read key also starts at most one login per account every 30 seconds (`429 login_cooldown`), as each
     runs a `claude` that may open a browser tab on your machine.
     Adding an account stays on the socket.
