@@ -187,3 +187,20 @@ func TestLatestRefusesOddTag(t *testing.T) {
 		t.Fatal("an odd tag was taken")
 	}
 }
+
+func TestBinaryRefusesOversize(t *testing.T) {
+	var tgz bytes.Buffer
+	zw := gzip.NewWriter(&tgz)
+	tw := tar.NewWriter(zw)
+	// only the header: the size it declares is refused before a byte of the file is read
+	if err := tw.WriteHeader(&tar.Header{Name: "ccswap", Mode: 0o755, Size: maxBinary + 1, Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	tw.Flush()
+	zw.Close()
+	exe, err := binary(tgz.Bytes())
+	var ie *i18n.Error
+	if exe != nil || !errors.As(err, &ie) || ie.In(i18n.EN) != i18n.In(i18n.EN, "update.too_big", "ccswap") {
+		t.Fatalf("%d bytes, %v", len(exe), err)
+	}
+}

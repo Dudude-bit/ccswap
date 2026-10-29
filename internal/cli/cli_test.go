@@ -48,6 +48,7 @@ type fake struct {
 	listen   *string      // Status.Listen
 	version  string       // Status.Version
 	update   *api.Release // Status.Update
+	bin      string       // the binary the daemon runs, which Restart restarts on
 	err      error
 	delay    time.Duration // Status and Activate answer this late
 
@@ -132,6 +133,10 @@ func (f *fake) UseWebCode(context.Context, string) error { return f.err }
 func (f *fake) Version() string                          { return "test" }
 func (f *fake) InstallUpdate(context.Context) (api.Release, error) {
 	return api.Release{}, f.err
+}
+func (f *fake) Restart(_ context.Context, bin string) (api.Restart, error) {
+	f.call("restart " + bin)
+	return api.Restart{Bin: f.bin, Restarting: bin == f.bin}, f.err
 }
 func (f *fake) MigrateExport(context.Context, []string) (api.MigrateExport, error) {
 	f.call("export")

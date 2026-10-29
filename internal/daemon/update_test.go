@@ -3,10 +3,12 @@ package daemon
 import (
 	"context"
 	"errors"
+	"net"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Dudude-bit/ccswap/internal/api"
 	"github.com/Dudude-bit/ccswap/internal/i18n"
 	"github.com/Dudude-bit/ccswap/internal/update"
 )
@@ -180,5 +182,92 @@ func TestInstallUpdateRefusals(t *testing.T) {
 	}
 	if st, _ := e.d.Status(context.Background()); st.LastPollAt == nil {
 		t.Fatal("the daemon stopped")
+	}
+}
+
+// TestStopDuringUpdateStops: a signal or a cancelled caller stops the daemon even when an update is in place
+// by then; it never execs instead of exiting.
+func TestStopDuringUpdateStops(t *testing.T) {
+	r := &releases{latest: "v0.2.0"}
+	r.seam(t)
+	e := newTenv(t)
+	released(e, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	installRelease = func(context.Context, update.Release, string) error {
+		cancel() // SIGTERM arrives while the release goes in; the server waits for this request to end
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() { done <- e.d.Run(ctx) }()
+	waitFor(t, "first tick", func() bool {
+		st, _ := e.d.Status(context.Background())
+		return st.LastPollAt != nil
+	})
+	c, err := Dial(e.d.o.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if up, err := c.InstallUpdateWithResponse(context.Background()); err != nil || up.StatusCode() != 200 {
+		t.Fatalf("%v %v", err, up)
+	}
+	if err := <-done; err != nil {
+		t.Fatal("Run after a signal:", err)
+	}
+}
+
+func TestServerFailureDuringUpdateStops(t *testing.T) {
+	t.Cleanup(func() { serveAPI = serve })
+	e := newTenv(t)
+	failed := errors.New("socket gone")
+	serveAPI = func(context.Context, net.Listener, Core) error {
+		e.d.mu.Lock()
+		e.d.restart = true // an update is in place, but the server failed on its own
+		e.d.mu.Unlock()
+		return failed
+	}
+	if err := e.d.Run(context.Background()); !errors.Is(err, failed) {
+		t.Fatal("Run:", err)
+	}
+}
+
+func TestRestartOnReplacedBinary(t *testing.T) {
+	e := newTenv(t)
+	released(e, false)
+	done := make(chan error, 1)
+	go func() { done <- e.d.Run(context.Background()) }()
+	waitFor(t, "first tick", func() bool {
+		st, _ := e.d.Status(context.Background())
+		return st.LastPollAt != nil
+	})
+	c, err := Dial(e.d.o.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bin := range []string{"/usr/local/bin/ccswap", ""} {
+		r, err := c.RestartWithResponse(context.Background(), api.RestartRequest{Bin: bin})
+		if err != nil || r.JSON200 == nil || r.JSON200.Restarting || r.JSON200.Bin != "/opt/ccswap/ccswap" {
+			t.Fatalf("another binary %q: %v %v", bin, err, r)
+		}
+	}
+	select {
+	case err := <-done:
+		t.Fatal("Run stopped for another binary:", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	r, err := c.RestartWithResponse(context.Background(), api.RestartRequest{Bin: "/opt/ccswap/ccswap"})
+	if err != nil || r.JSON200 == nil || !r.JSON200.Restarting {
+		t.Fatalf("%v %v", err, r)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrRestart) {
+			t.Fatal("Run:", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not stop for the restart")
+	}
+	if _, err := e.d.Restart(context.Background(), "/opt/ccswap/ccswap"); !errors.Is(err, ErrUpdating) {
+		t.Fatal("a second restart:", err)
 	}
 }

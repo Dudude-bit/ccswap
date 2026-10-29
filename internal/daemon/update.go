@@ -35,12 +35,7 @@ var (
 // every start; releaseEvery is the wait between asks.
 var releaseAfter, releaseEvery = time.Minute, 12 * time.Hour
 
-const (
-	releaseTimeout = 30 * time.Second
-	installTimeout = 2 * time.Minute
-)
-
-func (d *Daemon) userAgent() string { return "ccswap/" + d.o.Version }
+const installTimeout = 2 * time.Minute
 
 // watchReleases asks GitHub for the newest release until ctx ends.
 func (d *Daemon) watchReleases(ctx context.Context) {
@@ -52,9 +47,7 @@ func (d *Daemon) watchReleases(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		c, cancel := context.WithTimeout(ctx, releaseTimeout)
-		rel, err := latestRelease(c, d.userAgent())
-		cancel()
+		rel, err := latestRelease(ctx, update.UserAgent(d.o.Version))
 		if err != nil {
 			d.logOnce("release", slog.LevelWarn, "update: cannot ask GitHub for the newest release", "err", err)
 		} else {
@@ -65,16 +58,20 @@ func (d *Daemon) watchReleases(ctx context.Context) {
 	}
 }
 
-// noteRelease keeps rel as the newest release and tells the page when that changes.
+// noteRelease keeps rel when it is newer than this build, and tells the page when what it shows changes.
 func (d *Daemon) noteRelease(rel update.Release) {
+	var up api.Release
+	if update.Newer(rel.Version, d.o.Version) {
+		up = api.Release{Version: rel.Version, Url: rel.URL}
+	}
 	d.mu.Lock()
-	changed := d.release.Version != rel.Version
-	d.release = rel
+	changed := d.release != up
+	d.release = up
 	d.mu.Unlock()
 	if !changed {
 		return
 	}
-	if update.Newer(rel.Version, d.o.Version) {
+	if up.Version != "" {
 		slog.Info("update: a new release is out", "version", rel.Version, "running", d.o.Version)
 	}
 	d.bus.publish()
@@ -83,12 +80,12 @@ func (d *Daemon) noteRelease(rel update.Release) {
 // newer is the newest release known when it is newer than this build.
 func (d *Daemon) newer() *api.Release {
 	d.mu.Lock()
-	rel := d.release
-	d.mu.Unlock()
-	if !update.Newer(rel.Version, d.o.Version) {
+	defer d.mu.Unlock()
+	if d.release.Version == "" {
 		return nil
 	}
-	return &api.Release{Version: rel.Version, Url: rel.URL}
+	rel := d.release
+	return &rel
 }
 
 // InstallUpdate installs the newest release over the daemon's binary and stops Run with ErrRestart. It
@@ -104,6 +101,26 @@ func (d *Daemon) InstallUpdate(ctx context.Context) (api.Release, error) {
 		return api.Release{}, err
 	}
 	slog.Info("update: installed, restarting on it", "from", d.o.Version, "to", rel.Version, "bin", d.o.Bin)
+	d.stopToRestart()
+	return api.Release{Version: rel.Version, Url: rel.URL}, nil
+}
+
+// Restart restarts the daemon on its binary as InstallUpdate does, when that binary is bin: ccswap update
+// has just installed a release over it. A daemon that runs another binary carries on and says which.
+func (d *Daemon) Restart(_ context.Context, bin string) (api.Restart, error) {
+	if bin == "" || bin != d.o.Bin {
+		return api.Restart{Bin: d.o.Bin}, nil
+	}
+	if !d.updating.CompareAndSwap(false, true) {
+		return api.Restart{}, ErrUpdating
+	}
+	slog.Info("update: ccswap update replaced the binary, restarting on it", "bin", d.o.Bin)
+	d.stopToRestart()
+	return api.Restart{Bin: d.o.Bin, Restarting: true}, nil
+}
+
+// stopToRestart stops Run, which then returns ErrRestart.
+func (d *Daemon) stopToRestart() {
 	d.mu.Lock()
 	d.restart = true
 	stop := d.cancel
@@ -111,13 +128,12 @@ func (d *Daemon) InstallUpdate(ctx context.Context) (api.Release, error) {
 	if stop != nil {
 		stop()
 	}
-	return api.Release{Version: rel.Version, Url: rel.URL}, nil
 }
 
 func (d *Daemon) install(ctx context.Context) (update.Release, error) {
 	ctx, cancel := context.WithTimeout(ctx, installTimeout)
 	defer cancel()
-	rel, err := latestRelease(ctx, d.userAgent())
+	rel, err := latestRelease(ctx, update.UserAgent(d.o.Version))
 	if err != nil {
 		return rel, updateError{err}
 	}

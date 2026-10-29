@@ -34,6 +34,12 @@ var API = "https://api.github.com"
 // No client timeout: a download takes as long as the caller's context allows.
 var client = &http.Client{}
 
+// latestTimeout bounds the ask for the newest release, whoever asks.
+const latestTimeout = 30 * time.Second
+
+// UserAgent is what ccswap calls itself in its requests to GitHub and Anthropic.
+func UserAgent(version string) string { return "ccswap/" + version }
+
 // Release is a published ccswap release.
 type Release struct {
 	Version string // its tag, such as v0.2.0
@@ -43,6 +49,8 @@ type Release struct {
 
 // Latest asks GitHub for the newest release; drafts and prereleases are never the latest.
 func Latest(ctx context.Context, userAgent string) (Release, error) {
+	ctx, cancel := context.WithTimeout(ctx, latestTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, API+"/repos/"+repo+"/releases/latest", nil)
 	if err != nil {
 		return Release{}, err
@@ -173,7 +181,10 @@ func binary(tgz []byte) ([]byte, error) {
 			return nil, err
 		}
 		if h.Typeflag == tar.TypeReg && strings.TrimPrefix(h.Name, "./") == "ccswap" {
-			return io.ReadAll(io.LimitReader(tr, maxBinary))
+			if h.Size > maxBinary {
+				return nil, i18n.Err("update.too_big", h.Name)
+			}
+			return io.ReadAll(tr)
 		}
 	}
 }

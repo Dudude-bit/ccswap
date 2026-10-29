@@ -118,7 +118,7 @@ type Error struct {
 	// tokens_changed (migrate commit: a login changed since packing; the export is cancelled),
 	// bundle_spent (migrate import with replace: the bundle's login was used already; nothing is imported),
 	// no_update (update: no release is newer than this build, or this build has no version to compare),
-	// updating (update: one is running already, or is done and the daemon is restarting);
+	// updating (update, restart: one is running already, or is done and the daemon is restarting);
 	// 500 internal;
 	// 502 bundle_unchecked (migrate import with replace: the bundle's login was not refreshed, as Anthropic failed or
 	// no time was left; nothing is imported, try again),
@@ -224,6 +224,21 @@ type RemoteRequest struct {
 
 	// Url https://..., or http to a loopback or private address; empty turns remote usage off
 	Url string `json:"url"`
+}
+
+// Restart defines model for Restart.
+type Restart struct {
+	// Bin The binary the daemon runs; empty when it does not know
+	Bin string `json:"bin"`
+
+	// Restarting The daemon runs bin and is restarting on it
+	Restarting bool `json:"restarting"`
+}
+
+// RestartRequest defines model for RestartRequest.
+type RestartRequest struct {
+	// Bin The binary ccswap update replaced
+	Bin string `json:"bin"`
 }
 
 // Shift defines model for Shift.
@@ -395,6 +410,9 @@ type MigrateImportJSONRequestBody = MigrateImportRequest
 
 // SetRemoteJSONRequestBody defines body for SetRemote for application/json ContentType.
 type SetRemoteJSONRequestBody = RemoteRequest
+
+// RestartJSONRequestBody defines body for Restart for application/json ContentType.
+type RestartJSONRequestBody = RestartRequest
 
 // SignalJSONRequestBody defines body for Signal for application/json ContentType.
 type SignalJSONRequestBody = SignalRequest
@@ -612,6 +630,18 @@ type ClientInterface interface {
 	//
 	// Take usage from another ccswap (url and its key) instead of asking Anthropic; an empty url turns it off. Unix socket only.
 	SetRemote(ctx context.Context, body SetRemoteJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RestartWithBody performs a POST /v1/restart (the `Restart` operationId) request,
+	// with any type of body and a specified content type.
+	//
+	// Restart the daemon on its binary as /v1/update does, when that binary is the one named: ccswap update asks this after it installed a release over itself. A daemon that runs another binary carries on. The answer comes before the daemon stops. Unix socket only.
+	RestartWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// Restart performs a POST /v1/restart (the `Restart` operationId) request.
+	// Takes a body of the `application/json` content type.
+	//
+	// Restart the daemon on its binary as /v1/update does, when that binary is the one named: ccswap update asks this after it installed a release over itself. A daemon that runs another binary carries on. The answer comes before the daemon stops. Unix socket only.
+	Restart(ctx context.Context, body RestartJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// SignalWithBody performs a POST /v1/signal (the `Signal` operationId) request,
 	// with any type of body and a specified content type.
@@ -1052,6 +1082,38 @@ func (c *Client) SetRemoteWithBody(ctx context.Context, contentType string, body
 // Take usage from another ccswap (url and its key) instead of asking Anthropic; an empty url turns it off. Unix socket only.
 func (c *Client) SetRemote(ctx context.Context, body SetRemoteJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewSetRemoteRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// RestartWithBody performs a POST /v1/restart (the `Restart` operationId) request,
+// with any type of body and a specified content type.
+//
+// Restart the daemon on its binary as /v1/update does, when that binary is the one named: ccswap update asks this after it installed a release over itself. A daemon that runs another binary carries on. The answer comes before the daemon stops. Unix socket only.
+func (c *Client) RestartWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRestartRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// Restart performs a POST /v1/restart (the `Restart` operationId) request.
+// Takes a body of the `application/json` content type.
+//
+// Restart the daemon on its binary as /v1/update does, when that binary is the one named: ccswap update asks this after it installed a release over itself. A daemon that runs another binary carries on. The answer comes before the daemon stops. Unix socket only.
+func (c *Client) Restart(ctx context.Context, body RestartJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRestartRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1861,6 +1923,46 @@ func NewSetRemoteRequestWithBody(server string, contentType string, body io.Read
 	return req, nil
 }
 
+// NewRestartRequest calls the generic Restart builder with application/json body
+func NewRestartRequest(server string, body RestartJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewRestartRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewRestartRequestWithBody constructs an http.Request for the Restart method, with any body, and a specified content type
+func NewRestartRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/restart")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewSignalRequest calls the generic Signal builder with application/json body
 func NewSignalRequest(server string, body SignalJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -2308,6 +2410,20 @@ type ClientWithResponsesInterface interface {
 	//
 	// Take usage from another ccswap (url and its key) instead of asking Anthropic; an empty url turns it off. Unix socket only.
 	SetRemoteWithResponse(ctx context.Context, body SetRemoteJSONRequestBody, reqEditors ...RequestEditorFn) (*SetRemoteResponse, error)
+
+	// RestartWithBodyWithResponse performs a POST /v1/restart (the `Restart` operationId) request,
+	// with any type of body and a specified content type.
+	//
+	// Restart the daemon on its binary as /v1/update does, when that binary is the one named: ccswap update asks this after it installed a release over itself. A daemon that runs another binary carries on. The answer comes before the daemon stops. Unix socket only.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	RestartWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RestartResponse, error)
+
+	// RestartWithResponse performs a POST /v1/restart (the `Restart` operationId) request.
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Restart the daemon on its binary as /v1/update does, when that binary is the one named: ccswap update asks this after it installed a release over itself. A daemon that runs another binary carries on. The answer comes before the daemon stops. Unix socket only.
+	RestartWithResponse(ctx context.Context, body RestartJSONRequestBody, reqEditors ...RequestEditorFn) (*RestartResponse, error)
 
 	// SignalWithBodyWithResponse performs a POST /v1/signal (the `Signal` operationId) request,
 	// with any type of body and a specified content type.
@@ -3284,6 +3400,68 @@ func (r SetRemoteResponse) ContentType() string {
 	return ""
 }
 
+type RestartResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *Restart
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *Error
+	// JSON409 the response for an HTTP 409 `application/json` response
+	JSON409 *Error
+	// JSON500 the response for an HTTP 500 `application/json` response
+	JSON500 *Error
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r RestartResponse) GetJSON200() *Restart {
+	return r.JSON200
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r RestartResponse) GetJSON400() *Error {
+	return r.JSON400
+}
+
+// GetJSON409 returns the response for an HTTP 409 `application/json` response
+func (r RestartResponse) GetJSON409() *Error {
+	return r.JSON409
+}
+
+// GetJSON500 returns the response for an HTTP 500 `application/json` response
+func (r RestartResponse) GetJSON500() *Error {
+	return r.JSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r RestartResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r RestartResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RestartResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r RestartResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type SignalResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -3979,6 +4157,32 @@ func (c *ClientWithResponses) SetRemoteWithResponse(ctx context.Context, body Se
 		return nil, err
 	}
 	return ParseSetRemoteResponse(rsp)
+}
+
+// RestartWithBodyWithResponse performs a POST /v1/restart (the `Restart` operationId) request,
+// with any type of body and a specified content type.
+//
+// Restart the daemon on its binary as /v1/update does, when that binary is the one named: ccswap update asks this after it installed a release over itself. A daemon that runs another binary carries on. The answer comes before the daemon stops. Unix socket only.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) RestartWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RestartResponse, error) {
+	rsp, err := c.RestartWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRestartResponse(rsp)
+}
+
+// RestartWithResponse performs a POST /v1/restart (the `Restart` operationId) request.
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Restart the daemon on its binary as /v1/update does, when that binary is the one named: ccswap update asks this after it installed a release over itself. A daemon that runs another binary carries on. The answer comes before the daemon stops. Unix socket only.
+func (c *ClientWithResponses) RestartWithResponse(ctx context.Context, body RestartJSONRequestBody, reqEditors ...RequestEditorFn) (*RestartResponse, error) {
+	rsp, err := c.Restart(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRestartResponse(rsp)
 }
 
 // SignalWithBodyWithResponse performs a POST /v1/signal (the `Signal` operationId) request,
@@ -4826,6 +5030,53 @@ func ParseSetRemoteResponse(rsp *http.Response) (*SetRemoteResponse, error) {
 	return response, nil
 }
 
+// ParseRestartResponse parses an HTTP response from a RestartWithResponse call
+func ParseRestartResponse(rsp *http.Response) (*RestartResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RestartResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Restart
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseSignalResponse parses an HTTP response from a SignalWithResponse call
 func ParseSignalResponse(rsp *http.Response) (*SignalResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -5155,6 +5406,9 @@ type ServerInterface interface {
 
 	// (PUT /v1/remote)
 	SetRemote(c fiber.Ctx) error
+
+	// (POST /v1/restart)
+	Restart(c fiber.Ctx) error
 
 	// (POST /v1/signal)
 	Signal(c fiber.Ctx) error
@@ -5557,6 +5811,24 @@ func (siw *ServerInterfaceWrapper) SetRemote(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// Restart operation middleware
+func (siw *ServerInterfaceWrapper) Restart(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.Restart(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // Signal operation middleware
 func (siw *ServerInterfaceWrapper) Signal(c fiber.Ctx) error {
 
@@ -5749,6 +6021,8 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Post(options.BaseURL+"/v1/refresh", wrapper.Refresh)
 
 	router.Post(options.BaseURL+"/v1/update", wrapper.InstallUpdate)
+
+	router.Post(options.BaseURL+"/v1/restart", wrapper.Restart)
 
 	router.Post(options.BaseURL+"/v1/signal", wrapper.Signal)
 
@@ -6445,6 +6719,50 @@ func (response SetRemote500JSONResponse) VisitSetRemoteResponse(ctx fiber.Ctx) e
 	return ctx.JSON(&response)
 }
 
+type RestartRequestObject struct {
+	Body *RestartJSONRequestBody
+}
+
+type RestartResponseObject interface {
+	VisitRestartResponse(ctx fiber.Ctx) error
+}
+
+type Restart200JSONResponse Restart
+
+func (response Restart200JSONResponse) VisitRestartResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(200)
+
+	return ctx.JSON(&response)
+}
+
+type Restart400JSONResponse struct{ ErrorJSONResponse }
+
+func (response Restart400JSONResponse) VisitRestartResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(400)
+
+	return ctx.JSON(&response)
+}
+
+type Restart409JSONResponse Error
+
+func (response Restart409JSONResponse) VisitRestartResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(409)
+
+	return ctx.JSON(&response)
+}
+
+type Restart500JSONResponse Error
+
+func (response Restart500JSONResponse) VisitRestartResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(500)
+
+	return ctx.JSON(&response)
+}
+
 type SignalRequestObject struct {
 	Body *SignalJSONRequestBody
 }
@@ -6744,6 +7062,9 @@ type StrictServerInterface interface {
 
 	// (PUT /v1/remote)
 	SetRemote(ctx context.Context, request SetRemoteRequestObject) (SetRemoteResponseObject, error)
+
+	// (POST /v1/restart)
+	Restart(ctx context.Context, request RestartRequestObject) (RestartResponseObject, error)
 
 	// (POST /v1/signal)
 	Signal(ctx context.Context, request SignalRequestObject) (SignalResponseObject, error)
@@ -7250,6 +7571,37 @@ func (sh *strictHandler) SetRemote(ctx fiber.Ctx) error {
 	return nil
 }
 
+// Restart operation middleware
+func (sh *strictHandler) Restart(ctx fiber.Ctx) error {
+	var request RestartRequestObject
+
+	var body RestartJSONRequestBody
+	if err := ctx.Bind().Body(&body); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+	request.Body = &body
+
+	handler := func(ctx fiber.Ctx, request interface{}) (interface{}, error) {
+		return sh.ssi.Restart(ctx.Context(), request.(RestartRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "Restart")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(RestartResponseObject); ok {
+		if err := validResponse.VisitRestartResponse(ctx); err != nil {
+			return err
+		}
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
 // Signal operation middleware
 func (sh *strictHandler) Signal(ctx fiber.Ctx) error {
 	var request SignalRequestObject
@@ -7454,103 +7806,106 @@ func (sh *strictHandler) OpenWebSession(ctx fiber.Ctx) error {
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"//8=",
+	"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",
+	"693/BQAA//8=",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

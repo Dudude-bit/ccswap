@@ -56,6 +56,8 @@ type Core interface {
 	MigrateImport(ctx context.Context, r api.MigrateImportRequest) (api.MigrateImport, error)
 	// InstallUpdate installs the newest release over the daemon's binary, then restarts the daemon on it.
 	InstallUpdate(ctx context.Context) (api.Release, error)
+	// Restart restarts the daemon on its binary when that binary is bin, which ccswap update replaced.
+	Restart(ctx context.Context, bin string) (api.Restart, error)
 	// Version is the build the daemon runs.
 	Version() string
 }
@@ -154,6 +156,11 @@ func (s strict) MigrateImport(ctx context.Context, r api.MigrateImportRequestObj
 func (s strict) InstallUpdate(ctx context.Context, _ api.InstallUpdateRequestObject) (api.InstallUpdateResponseObject, error) {
 	r, err := s.c.InstallUpdate(ctx)
 	return api.InstallUpdate200JSONResponse(r), err
+}
+
+func (s strict) Restart(ctx context.Context, r api.RestartRequestObject) (api.RestartResponseObject, error) {
+	x, err := s.c.Restart(ctx, r.Body.Bin)
+	return api.Restart200JSONResponse(x), err
 }
 
 // OpenWebSession hands out the admin key the TCP listener holds, which the unix socket does not know.

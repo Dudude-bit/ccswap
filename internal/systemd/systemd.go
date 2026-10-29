@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Dudude-bit/ccswap/internal/atomicfile"
 	"github.com/Dudude-bit/ccswap/internal/i18n"
 )
 
@@ -94,20 +95,73 @@ func quote(s string, dollar bool) string {
 // unusable, so a restart would only loop.
 const alreadyRunning, exConfig = 3, 78
 
+// service is what a unit keeps when this version rewrites it: the program, the language of its description,
+// its log and its environment (KEY=value).
+type service struct {
+	bin, desc, log string
+	env            []string
+}
+
 // Unit pins CCSWAP_HOME: the user manager's XDG_CONFIG_HOME may differ from the installing shell's.
 func Unit(binPath, home string) []byte {
-	var b bytes.Buffer
-	log := "append:" + strings.ReplaceAll(filepath.Join(home, "daemon.log"), "%", "%%")
-	fmt.Fprintf(&b, "[Unit]\nDescription=%s\n\n[Service]\nExecStart=%s daemon run\nRestart=on-failure\nRestartPreventExitStatus=%d %d\nRestartSec=5\nKillSignal=SIGTERM\nTimeoutStopSec=30\nStandardOutput=%s\nStandardError=%s\nEnvironment=%s\n",
-		i18n.T("systemd.unit_description"), quote(binPath, true), alreadyRunning, exConfig, log, log, quote("CCSWAP_HOME="+home, false))
+	s := service{bin: binPath, desc: i18n.T("systemd.unit_description"), log: filepath.Join(home, "daemon.log"), env: []string{"CCSWAP_HOME=" + home}}
 	// the locale picks the language of the daemon's messages
 	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "LC_ALL", "LC_MESSAGES", "LANG"} {
 		if v := os.Getenv(k); v != "" {
-			fmt.Fprintf(&b, "Environment=%s\n", quote(k+"="+v, false))
+			s.env = append(s.env, k+"="+v)
 		}
+	}
+	return s.unit()
+}
+
+func (s service) unit() []byte {
+	var b bytes.Buffer
+	log := "append:" + strings.ReplaceAll(s.log, "%", "%%")
+	fmt.Fprintf(&b, "[Unit]\nDescription=%s\n\n[Service]\nExecStart=%s daemon run\nRestart=on-failure\nRestartPreventExitStatus=%d %d\nRestartSec=5\nKillSignal=SIGTERM\nTimeoutStopSec=30\nStandardOutput=%s\nStandardError=%s\n",
+		s.desc, quote(s.bin, true), alreadyRunning, exConfig, log, log)
+	for _, e := range s.env {
+		fmt.Fprintf(&b, "Environment=%s\n", quote(e, false))
 	}
 	b.WriteString("\n[Install]\nWantedBy=default.target\n")
 	return b.Bytes()
+}
+
+// word is the first systemd word of v, unquoted; % and $ stay doubled.
+func word(v string) string {
+	if !strings.HasPrefix(v, `"`) {
+		if f := strings.Fields(v); len(f) > 0 {
+			return f[0]
+		}
+		return ""
+	}
+	var w strings.Builder
+	for i := 1; i < len(v) && v[i] != '"'; i++ {
+		if v[i] == '\\' && i+1 < len(v) {
+			i++
+		}
+		w.WriteByte(v[i])
+	}
+	return w.String()
+}
+
+// parse reads back the service a unit describes.
+func parse(b []byte) service {
+	var s service
+	pct := strings.NewReplacer("%%", "%")
+	for _, l := range strings.Split(string(b), "\n") {
+		k, v, _ := strings.Cut(l, "=")
+		switch k {
+		case "Description":
+			s.desc = v
+		case "ExecStart":
+			s.bin = strings.NewReplacer("%%", "%", "$$", "$").Replace(word(v))
+		case "StandardOutput":
+			s.log = pct.Replace(strings.TrimPrefix(v, "append:"))
+		case "Environment":
+			s.env = append(s.env, pct.Replace(word(v)))
+		}
+	}
+	return s
 }
 
 func unitPath() (string, error) {
@@ -136,25 +190,39 @@ func ProgramPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, l := range strings.Split(string(b), "\n") {
-		v, ok := strings.CutPrefix(l, "ExecStart=")
-		if !ok {
-			continue
-		}
-		var w strings.Builder
-		if strings.HasPrefix(v, `"`) {
-			for i := 1; i < len(v) && v[i] != '"'; i++ {
-				if v[i] == '\\' && i+1 < len(v) {
-					i++
-				}
-				w.WriteByte(v[i])
-			}
-		} else {
-			w.WriteString(strings.Fields(v + " ")[0])
-		}
-		return strings.NewReplacer("%%", "%", "$$", "$").Replace(w.String()), nil
+	if s := parse(b); s.bin != "" {
+		return s.bin, nil
 	}
 	return "", fmt.Errorf("%s: no ExecStart", p)
+}
+
+// Refresh rewrites the installed unit as this version writes it when it runs bin, keeping its program,
+// description, log and environment, and reports whether it did. Nothing is restarted: after daemon-reload
+// the new unit takes effect at the service's next start.
+func Refresh(bin string) (bool, error) {
+	p, err := unitPath()
+	if err != nil {
+		return false, err
+	}
+	b, err := os.ReadFile(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	s := parse(b)
+	want := s.unit()
+	if s.bin != bin || bytes.Equal(want, b) {
+		return false, nil
+	}
+	if err := atomicfile.Write(p, want, 0o600); err != nil {
+		return false, err
+	}
+	if _, err := ctl("daemon-reload"); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 // ctl runs systemctl --user; a missing user bus gets an actionable message.

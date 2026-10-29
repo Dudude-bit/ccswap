@@ -230,3 +230,41 @@ func TestUnitPathOfEarlierLinuxBuild(t *testing.T) {
 		t.Fatal(p, err)
 	}
 }
+
+// TestRefreshKeepsWhatTheUnitHas: the daemon brings a unit an older version wrote up to date without the
+// shell that installed it: the program, description, log and environment stay, and nothing restarts.
+func TestRefreshKeepsWhatTheUnitHas(t *testing.T) {
+	calls := seams(t)
+	unit := filepath.Join(Dir, Label)
+	if ok, err := Refresh("/b"); ok || err != nil {
+		t.Fatal("no unit:", ok, err)
+	}
+	for _, k := range envKeys {
+		t.Setenv(k, "")
+	}
+	t.Setenv("https_proxy", "http://p:1")
+	t.Setenv("LANG", "ru_RU.UTF-8")
+	cur := strings.Replace(string(Unit(`/opt/a b/50%/ccswap`, "/h 50%")), "Description="+i18n.T("systemd.unit_description"), "Description=ccswap, as said in Russian", 1)
+	cur = strings.Replace(cur, "\n\n[Install]", "\nEnvironment=\"SSL_CERT_FILE=/c a\"\n\n[Install]", 1) // added by hand
+	old := strings.Replace(cur, "RestartPreventExitStatus=3 78\n", "", 1)
+	for _, k := range envKeys {
+		t.Setenv(k, "") // the daemon's environment is not the installing shell's
+	}
+	os.WriteFile(unit, []byte(old), 0o600)
+	if ok, err := Refresh("/usr/local/bin/ccswap"); ok || err != nil {
+		t.Fatal("a unit of another binary:", ok, err)
+	}
+	if ok, err := Refresh(`/opt/a b/50%/ccswap`); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	if b, _ := os.ReadFile(unit); string(b) != cur {
+		t.Fatalf("got:\n%s\nwant:\n%s", b, cur)
+	}
+	if strings.Join(*calls, "|") != "systemctl --user daemon-reload" {
+		t.Fatalf("calls %q", *calls)
+	}
+	*calls = nil
+	if ok, err := Refresh(`/opt/a b/50%/ccswap`); ok || err != nil || len(*calls) != 0 {
+		t.Fatal("up to date:", ok, err, *calls)
+	}
+}

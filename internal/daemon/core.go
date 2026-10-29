@@ -33,7 +33,6 @@ import (
 	"github.com/Dudude-bit/ccswap/internal/store"
 	"github.com/Dudude-bit/ccswap/internal/switcher"
 	"github.com/Dudude-bit/ccswap/internal/t3"
-	"github.com/Dudude-bit/ccswap/internal/update"
 )
 
 const (
@@ -123,7 +122,7 @@ type Daemon struct {
 	runCtx     context.Context
 	cancel     context.CancelFunc // stops Run
 	restart    bool               // an update replaced the binary: Run returns ErrRestart
-	release    update.Release     // the newest release, as of the last ask
+	release    api.Release        // the newest release when it is newer than this build, as of the last ask
 	usage      map[string]*acctUsage
 	pending    map[string]pendingPair // rotated pairs whose save failed; saved before anything else
 	unknown    bool                   // the entry holds a login ccswap does not know
@@ -193,6 +192,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	defer release()
+	parent := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	context.AfterFunc(ctx, d.bus.close)
@@ -215,15 +215,18 @@ func (d *Daemon) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			err := <-srv
 			d.stop()
-			return d.ended(err)
+			return d.ended(parent, err)
 		case err := <-srv:
 			stopped := ctx.Err() != nil // the server stopped because Run was asked to: not a failure
 			cancel()
 			d.stop()
-			if err == nil && !stopped {
+			if stopped {
+				return d.ended(parent, err)
+			}
+			if err == nil {
 				err = errors.New("api server stopped")
 			}
-			return d.ended(err)
+			return err
 		case <-t.C:
 		case <-d.kick:
 		}
@@ -268,18 +271,19 @@ func (d *Daemon) startHTTP(ctx context.Context, cancel context.CancelFunc) func(
 	return func() { cancel(); <-done }
 }
 
-// stop waits for a tick an API request may still run (it may be saving rotated tokens), then
-// saves every rotated pair still pending; what cannot be saved is a lost login and is logged.
-// ended is Run's error, ErrRestart once an update is in place.
-func (d *Daemon) ended(err error) error {
+// ended is Run's error once it stopped as asked: ErrRestart when an update asked, and not a signal or the
+// caller, which stop the daemon whether or not an update is in place.
+func (d *Daemon) ended(parent context.Context, err error) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.restart {
+	if d.restart && parent.Err() == nil {
 		return ErrRestart
 	}
 	return err
 }
 
+// stop waits for a tick an API request may still run (it may be saving rotated tokens), then
+// saves every rotated pair still pending; what cannot be saved is a lost login and is logged.
 func (d *Daemon) stop() {
 	d.tick.Lock()
 	defer d.tick.Unlock()

@@ -173,8 +173,10 @@ make install
 
 **Updating.** `ccswap update` installs the newest release over the ccswap you run it with: it downloads
 the archive for your platform, checks it against the release's `checksums.txt`, makes sure the new binary
-runs here and reports the release's version, puts it in place with one rename, and then runs the new
-binary's `ccswap daemon install`, which restarts the daemon on it. `ccswap update --check` only says
+runs here and reports the release's version, and puts it in place with one rename. A daemon that runs that
+same file then restarts on it in its own process, as after the page's Update; the service, its proxy and
+locale settings, and the hook stay as they are. A daemon that runs another ccswap is left alone, and
+`ccswap update` names the binary to update instead. `ccswap update --check` only says
 whether a newer release is out. The daemon checks for one on its own (see
 [What ccswap asks GitHub](#terms-of-use)): `ccswap status` and the web page then say so, and the page
 has an Update button. A build without a version, such as `make install` from a checkout without tags,
@@ -347,6 +349,12 @@ When a newer ccswap release is out, the page says so, with a link to what is new
 Update installs it the way `ccswap update` does: the daemon replaces its own binary, starts again on it in
 the same process, and the page reloads once the daemon is back. The service and the hook keep pointing at
 the same file. A page that only looks shows the command to run instead.
+
+As it starts, the daemon rewrites its service's definition (the LaunchAgent or the systemd unit) when it
+runs this daemon's binary and an update changed what `ccswap daemon install` writes. It keeps the binary,
+the log, and the environment in the file, so the proxy and the locale stay, and it restarts nothing:
+launchd reads the new definition at your next login or `ccswap daemon install`, systemd (after the
+`daemon-reload` the daemon runs) at the service's next start.
 
 The page is served by the daemon's TCP listener at `http://127.0.0.1:8318/management.html` (`/`
 redirects there); `[t3] enabled = false` turns it off. Two keys guard it:

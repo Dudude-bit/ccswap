@@ -18,6 +18,7 @@ import (
 	"github.com/Dudude-bit/ccswap/internal/launchd"
 	"github.com/Dudude-bit/ccswap/internal/store"
 	"github.com/Dudude-bit/ccswap/internal/switcher"
+	"github.com/Dudude-bit/ccswap/internal/update"
 )
 
 // newDaemonCmd returns `daemon`; install/uninstall/status are attached from another file.
@@ -50,7 +51,7 @@ func newDaemonCmd() *cobra.Command {
 				return cannotStart(err)
 			}
 			client := anthropic.New()
-			client.UserAgent = "ccswap/" + version
+			client.UserAgent = update.UserAgent(version)
 			sw := switcher.New(switcher.Deps{
 				KC: kc, Store: st, Profiles: client,
 				Service:    claudecode.ServiceName(cfg.Claude.ConfigDir),
@@ -61,6 +62,9 @@ func newDaemonCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			slog.Info("ccswap daemon starting", "version", version, "home", home)
+			if bin != "" {
+				refreshService(bin)
+			}
 			err = daemon.New(daemon.Options{
 				Config: cfg, Store: st, KC: kc, API: client, Switcher: sw, Notifier: platformNotifier(),
 				Home: home, Socket: sock, Version: version, Host: hostname(), Bin: bin,
@@ -79,6 +83,19 @@ func newDaemonCmd() *cobra.Command {
 	})
 	d.AddCommand(newInstallCmd(), newUninstallCmd(), newDaemonStatusCmd())
 	return d
+}
+
+// refreshService brings the service's definition up to date when it runs bin, so a release that changed
+// what ccswap daemon install writes needs no reinstall after an update; it never restarts the daemon, and
+// takes effect at the service's next start.
+func refreshService(bin string) {
+	svc := platformService()
+	switch ok, err := svc.Refresh(bin); {
+	case err != nil:
+		slog.Warn("service: cannot bring its definition up to date", "service", svc.Label, "err", err)
+	case ok:
+		slog.Info("service: definition brought up to date, in effect from its next start", "service", svc.Label)
+	}
 }
 
 // execSelf is syscall.Exec; a test seam.

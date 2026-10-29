@@ -107,6 +107,10 @@ func (f *fakeCore) InstallUpdate(context.Context) (api.Release, error) {
 	f.rec("update")
 	return api.Release{Version: "v1.2.4", Url: "https://github.com/Dudude-bit/ccswap/releases/tag/v1.2.4"}, f.err
 }
+func (f *fakeCore) Restart(_ context.Context, bin string) (api.Restart, error) {
+	f.rec("restart " + bin)
+	return api.Restart{Bin: bin, Restarting: true}, f.err
+}
 func (f *fakeCore) MigrateExport(_ context.Context, names []string) (api.MigrateExport, error) {
 	f.rec("migrate export")
 	f.names = names
@@ -238,7 +242,12 @@ func TestRoutesOverSocket(t *testing.T) {
 	if up.JSON200.Version != "v1.2.4" {
 		t.Fatalf("update %+v", up.JSON200)
 	}
-	if len(f.calls) != 16 || f.calls[13] != "migrate cancel t1k" {
+	rs, _ := c.RestartWithResponse(ctx, api.RestartRequest{Bin: "/b/ccswap"})
+	want(200, rs.StatusCode())
+	if !rs.JSON200.Restarting || f.calls[16] != "restart /b/ccswap" {
+		t.Fatalf("restart %+v %v", rs.JSON200, f.calls)
+	}
+	if len(f.calls) != 17 || f.calls[13] != "migrate cancel t1k" {
 		t.Fatalf("calls %v", f.calls)
 	}
 }
@@ -553,6 +562,7 @@ var (
 		{"POST", "/v1/signal", `{"payload":{}}`},
 		{"PUT", "/v1/remote", `{"url":""}`},
 		{"POST", "/v1/web/code", ""},
+		{"POST", "/v1/restart", `{"bin":"/b"}`},
 	}
 )
 

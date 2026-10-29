@@ -87,6 +87,9 @@ GitHub, over HTTPS:
   only then replaces the old one in one rename. A failed update leaves the old binary and the running
   daemon as they were.
 - Only a newer release is installed: never an older one, a draft or a prerelease.
+- An update never copies the environment of the shell it runs in into the service: the daemon restarts in
+  its own process, and its service and the hook stay as installed. `ccswap update` restarts only a daemon
+  that runs the binary it replaced.
 - The page's Update needs the admin key, a loopback listener and a loopback `Host`, like any other change.
   The read key cannot start an update.
 
@@ -109,7 +112,8 @@ GitHub, over HTTPS:
     one (`127.0.0.1`, `[::1]` or `localhost`), so a site that rebinds its name to 127.0.0.1 gets
     nothing. A listener on any other address only reads, even with the admin key.
   - Everything else is served on the socket only: a forced switch, adding, signing in and removing
-    accounts, the hook signal, the language, the web codes, `remote` and `migrate`, among others.
+    accounts, the hook signal, the language, the web codes, `remote`, `migrate` and the restart
+    `ccswap update` asks for, among others.
   - The listener speaks plain HTTP. Outside a network you trust, keep it on loopback and use an SSH
     tunnel.
 - **Replacing a key.** Both keys last until you replace them. If one leaks, delete it from the vault

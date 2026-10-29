@@ -268,6 +268,21 @@ paths:
         "409": {$ref: "#/components/responses/Error"}
         "500": {$ref: "#/components/responses/Error"}
         "502": {$ref: "#/components/responses/Error"}
+  /v1/restart:
+    post:
+      operationId: restart
+      description: >-
+        Restart the daemon on its binary as /v1/update does, when that binary is the one named: ccswap update asks this
+        after it installed a release over itself. A daemon that runs another binary carries on. The answer comes before
+        the daemon stops. Unix socket only.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/RestartRequest"}}}
+      responses:
+        "200": {description: Whether the daemon restarts, content: {application/json: {schema: {$ref: "#/components/schemas/Restart"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
   /v1/signal:
     post:
       operationId: signal
@@ -313,7 +328,7 @@ components:
             tokens_changed (migrate commit: a login changed since packing; the export is cancelled),
             bundle_spent (migrate import with replace: the bundle's login was used already; nothing is imported),
             no_update (update: no release is newer than this build, or this build has no version to compare),
-            updating (update: one is running already, or is done and the daemon is restarting);
+            updating (update, restart: one is running already, or is done and the daemon is restarting);
             500 internal;
             502 bundle_unchecked (migrate import with replace: the bundle's login was not refreshed, as Anthropic failed or
             no time was left; nothing is imported, try again),
@@ -364,6 +379,17 @@ components:
       properties:
         version: {type: string, description: Its tag, such as v0.2.0}
         url: {type: string, description: Its page on GitHub}
+    RestartRequest:
+      type: object
+      required: [bin]
+      properties:
+        bin: {type: string, description: The binary ccswap update replaced}
+    Restart:
+      type: object
+      required: [restarting, bin]
+      properties:
+        restarting: {type: boolean, description: The daemon runs bin and is restarting on it}
+        bin: {type: string, description: The binary the daemon runs; empty when it does not know}
     Shift:
       type: object
       required: [account, from]

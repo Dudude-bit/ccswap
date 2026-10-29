@@ -251,7 +251,8 @@ web page, part of the API and the T3 Code hub:
 | `GET /v0/management/auth-files`, `POST /v0/management/api-call`, `POST /v0/management/reset-quota`: the part of CLIProxyAPI's management API T3 Code reads | the read key or the admin key |
 
 Everything else, such as adding, logging in and removing accounts, a forced switch, the hook signal,
-`remote`, `migrate`, the language and the web codes, is served on the socket only. The `Host` check
+`remote`, `migrate`, the language, the web codes and the restart `ccswap update` asks for, is served on the
+socket only. The `Host` check
 stops a site whose name was pointed at 127.0.0.1 (DNS rebinding) from changing anything.
 
 The hub routes answer as T3 Code expects: `auth-files` lists the accounts (name, email, whether they are
@@ -274,10 +275,22 @@ tag it follows, and so does a `make build` name such as `v0.1.1-5-g90b77e9`. A b
 in [SECURITY.md](../SECURITY.md#updates)), answers, and stops the daemon as on SIGTERM: it saves pending
 tokens and closes the socket and the listener. Then the daemon execs the new binary in the same process,
 so launchd, systemd or the terminal that started it keeps it, and the new daemon takes the lock and the
-socket as on any start. Should exec fail, the daemon exits 1 and its service starts the new file. The
-service and the hook already point at that path, so nothing else changes; only a release that changes
-what `ccswap daemon install` writes needs that command run again, which `ccswap update` does by itself:
-it runs the new binary's `ccswap daemon install` when the service is installed.
+socket as on any start. Should exec fail, the daemon exits 1 and its service starts the new file. Only
+the update's own stop turns into a restart: a SIGTERM, from `systemctl stop` or `ccswap daemon uninstall`,
+stops the daemon even when an update is in place by then.
+
+`ccswap update` installs over its own binary the same way, then asks the daemon over the socket
+(`POST /v1/restart`, with that binary's path) to restart on it. A daemon that runs that path restarts as
+above; one that runs another binary carries on, and `ccswap update` says which binary to update. Neither
+path touches the service or the hook, which already point at that path: the environment the service was
+installed with, such as a proxy, stays.
+
+A release may change what `ccswap daemon install` writes. So as the daemon starts, it reads its service's
+definition and, when that runs its own binary, rewrites it as this version writes it, with the binary, the
+log and the environment the file has (and, for systemd, its description). It never stops or reloads its
+job: launchd reads the plist at the next bootstrap (a login, or `ccswap daemon install`); for systemd it
+runs `systemctl --user daemon-reload`, and the unit takes effect at the service's next start. The hook
+needs no such care: it is the binary's path, which an update keeps.
 
 ## What ccswap never does
 
