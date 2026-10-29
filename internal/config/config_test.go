@@ -16,7 +16,7 @@ func TestLoadDefaultsWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{PollInterval: 60 * time.Second, Thresholds: Thresholds{95, 98, 10, 10 * time.Minute, 5 * time.Minute, 30 * time.Minute}, T3: T3{true, "127.0.0.1:8318"}}
+	want := Config{PollInterval: 60 * time.Second, Thresholds: Thresholds{95, 98, 10, 10 * time.Minute, 5 * time.Minute, 30 * time.Minute}, T3: T3{true, "127.0.0.1:8318"}, Update: Update{true}}
 	if c != want {
 		t.Fatalf("got %+v", c)
 	}
@@ -41,11 +41,11 @@ func TestLoadPartialFile(t *testing.T) {
 }
 
 func TestLoadFull(t *testing.T) {
-	c, err := Load(write(t, "poll_interval=\"30s\"\n[thresholds]\nmin_dwell=\"1m\"\n[t3]\nenabled=false\nlisten=\"127.0.0.1:1\"\n[claude]\nconfig_dir=\"/x\"\n"))
+	c, err := Load(write(t, "poll_interval=\"30s\"\n[thresholds]\nmin_dwell=\"1m\"\n[t3]\nenabled=false\nlisten=\"127.0.0.1:1\"\n[claude]\nconfig_dir=\"/x\"\n[update]\ncheck=false\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.PollInterval != 30*time.Second || c.Thresholds.MinDwell != time.Minute || c.T3.Enabled || c.T3.Listen != "127.0.0.1:1" || c.Claude.ConfigDir != "/x" {
+	if c.PollInterval != 30*time.Second || c.Thresholds.MinDwell != time.Minute || c.T3.Enabled || c.T3.Listen != "127.0.0.1:1" || c.Claude.ConfigDir != "/x" || c.Update.Check {
 		t.Fatalf("got %+v", c)
 	}
 }

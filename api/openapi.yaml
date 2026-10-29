@@ -256,6 +256,33 @@ paths:
       responses:
         "204": {description: Done}
         "500": {$ref: "#/components/responses/Error"}
+  /v1/update:
+    post:
+      operationId: installUpdate
+      description: >-
+        Install the newest release over the binary this daemon runs, then restart the daemon on it: the archive must
+        match the release's checksums.txt and the new binary must run and report the release's version before it
+        replaces the old one. The answer comes once the new binary is in place, and the daemon restarts right after.
+      responses:
+        "200": {description: The release now installed, content: {application/json: {schema: {$ref: "#/components/schemas/Release"}}}}
+        "409": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+  /v1/restart:
+    post:
+      operationId: restart
+      description: >-
+        Restart the daemon on its binary as /v1/update does, when that binary is the one named: ccswap update asks this
+        after it installed a release over itself. A daemon that runs another binary carries on. The answer comes before
+        the daemon stops. Unix socket only.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/RestartRequest"}}}
+      responses:
+        "200": {description: Whether the daemon restarts, content: {application/json: {schema: {$ref: "#/components/schemas/Restart"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
   /v1/signal:
     post:
       operationId: signal
@@ -299,10 +326,14 @@ components:
             export: cancelled, expired, or forgotten by a daemon restart, possibly after its commit landed, so check
             whether the accounts are still here), export_done (migrate cancel: the export is committed already),
             tokens_changed (migrate commit: a login changed since packing; the export is cancelled),
-            bundle_spent (migrate import with replace: the bundle's login was used already; nothing is imported);
+            bundle_spent (migrate import with replace: the bundle's login was used already; nothing is imported),
+            no_update (update: no release is newer than this build, or this build has no version to compare),
+            updating (update, restart: one is running already, or is done and the daemon is restarting);
             500 internal;
             502 bundle_unchecked (migrate import with replace: the bundle's login was not refreshed, as Anthropic failed or
-            no time was left; nothing is imported, try again).
+            no time was left; nothing is imported, try again),
+            update_failed (update: GitHub failed, the download did not match its checksum, the new binary did not run, or
+            the old one could not be replaced; nothing changed).
         message: {type: string, description: A detail; clients show their own text per code}
     Thresholds:
       type: object
@@ -337,7 +368,28 @@ components:
           items: {$ref: "#/components/schemas/Shift"}
         listen: {type: string, description: "The address the TCP listener (T3 Code, the web page) is bound to, such as 127.0.0.1:8318; absent while it is off"}
         thresholds: {$ref: "#/components/schemas/Thresholds"}
+        update: {$ref: "#/components/schemas/Release"}
         warning: {type: string, description: Non-fatal warning of the last operation}
+    Release:
+      type: object
+      description: >-
+        A ccswap release. In Status, the newest one when it is newer than this build, as of the daemon's last check
+        on GitHub; absent before that check, while [update] check is off, and when this build has no version.
+      required: [version, url]
+      properties:
+        version: {type: string, description: Its tag, such as v0.2.0}
+        url: {type: string, description: Its page on GitHub}
+    RestartRequest:
+      type: object
+      required: [bin]
+      properties:
+        bin: {type: string, description: The binary ccswap update replaced}
+    Restart:
+      type: object
+      required: [restarting, bin]
+      properties:
+        restarting: {type: boolean, description: The daemon runs bin and is restarting on it}
+        bin: {type: string, description: The binary the daemon runs; empty when it does not know}
     Shift:
       type: object
       required: [account, from]

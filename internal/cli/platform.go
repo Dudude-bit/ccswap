@@ -39,15 +39,16 @@ type serviceManager struct {
 	Uninstall     func() error
 	Loaded        func() (bool, error)
 	ProgramPath   func() (string, error)
+	Refresh       func(bin string) (bool, error)
 }
 
 func platformService() serviceManager {
 	if claudecode.GOOS == "linux" {
 		return serviceManager{i18n.T("systemd.service"), systemd.Label, i18n.T("systemd.installed_running"),
 			i18n.T("systemd.removed"), i18n.T("systemd.loaded"), i18n.T("systemd.not_loaded"),
-			systemd.Install, systemd.Uninstall, systemd.Loaded, systemd.ProgramPath}
+			systemd.Install, systemd.Uninstall, systemd.Loaded, systemd.ProgramPath, systemd.Refresh}
 	}
 	return serviceManager{"LaunchAgent", launchd.Label, i18n.T("launchd.installed_running"),
 		i18n.T("launchd.removed"), i18n.T("launchd.loaded"), i18n.T("launchd.not_loaded"),
-		launchd.Install, launchd.Uninstall, launchd.Loaded, launchd.ProgramPath}
+		launchd.Install, launchd.Uninstall, launchd.Loaded, launchd.ProgramPath, launchd.Refresh}
 }

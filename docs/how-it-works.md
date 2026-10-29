@@ -246,12 +246,13 @@ web page, part of the API and the T3 Code hub:
 | The page and its files (`/management.html`, scripts, styles, fonts), with a Content Security Policy that allows nothing from other origins | nothing: they hold no data |
 | `GET /v1/i18n/<tag>`, the page's texts | nothing: they hold no secret |
 | `GET /v1/status`, `GET /v1/accounts`, `GET /v1/events` | the read key or the admin key |
-| `PATCH /v1/accounts/{name}`, `POST /v1/accounts/{name}/activate` (never forced), `PUT /v1/auto`, `PUT /v1/strategy`, `PUT /v1/thresholds`, `POST /v1/refresh` | the admin key, a listener on a loopback address, and a `Host` that names a loopback address or `localhost` |
+| `PATCH /v1/accounts/{name}`, `POST /v1/accounts/{name}/activate` (never forced), `PUT /v1/auto`, `PUT /v1/strategy`, `PUT /v1/thresholds`, `POST /v1/refresh`, `POST /v1/update` | the admin key, a listener on a loopback address, and a `Host` that names a loopback address or `localhost` |
 | `POST /v1/web/session`: trades a one-time code from `ccswap web` for the admin key | the code, a loopback listener and a loopback `Host` |
 | `GET /v0/management/auth-files`, `POST /v0/management/api-call`, `POST /v0/management/reset-quota`: the part of CLIProxyAPI's management API T3 Code reads | the read key or the admin key |
 
 Everything else, such as adding, logging in and removing accounts, a forced switch, the hook signal,
-`remote`, `migrate`, the language and the web codes, is served on the socket only. The `Host` check
+`remote`, `migrate`, the language, the web codes and the restart `ccswap update` asks for, is served on the
+socket only. The `Host` check
 stops a site whose name was pointed at 127.0.0.1 (DNS rebinding) from changing anything.
 
 The hub routes answer as T3 Code expects: `auth-files` lists the accounts (name, email, whether they are
@@ -260,6 +261,37 @@ returns its usage answer as described above, and `reset-quota` does nothing.
 
 `GET /v1/events` is a stream of server-sent events: a `state` event with the status and the accounts at
 once and after each change, and a `: ping` comment every 15 seconds.
+
+## Updates
+
+With `[update] check` on (the default), the daemon asks GitHub for the newest release a minute after it
+starts, so a daemon that keeps restarting does not ask on every start, and then every 12 hours. When that
+release is newer than the build it runs, the status carries it as `update`, which `ccswap status` and the
+page show. Versions compare as semver: a Go pseudo-version from `go install …@<commit>` sorts after the
+tag it follows, and so does a `make build` name such as `v0.1.1-5-g90b77e9`. A build without a version
+(`dev`) is never offered an update.
+
+`POST /v1/update` asks GitHub again, installs the release over the binary the daemon runs (the steps are
+in [SECURITY.md](../SECURITY.md#updates)), answers, and stops the daemon as on SIGTERM: it saves pending
+tokens and closes the socket and the listener. Then the daemon execs the new binary in the same process,
+so launchd, systemd or the terminal that started it keeps it, and the new daemon takes the lock and the
+socket as on any start. Should exec fail, the daemon exits 1 and its service starts the new file. Only
+the update's own stop turns into a restart: a SIGTERM, from `systemctl stop` or `ccswap daemon uninstall`,
+stops the daemon even when an update is in place by then.
+
+`ccswap update` installs over its own binary the same way, then asks the daemon over the socket
+(`POST /v1/restart`, with that binary's path) to restart on it. A daemon that runs that path restarts as
+above; one that runs another binary carries on, and `ccswap update` says which binary to update. Neither
+path touches the service or the hook, which already point at that path: the environment the service was
+installed with, such as a proxy, stays.
+
+A release may change what `ccswap daemon install` writes. So as the daemon starts, it reads its service's
+definition and, when that runs its own binary, rewrites it as this version writes it, with the binary, the
+log and the environment the file has (and, for systemd, its description). A file with keys no ccswap
+version writes was edited by hand and stays as it is. It never stops or reloads its
+job: launchd reads the plist at the next bootstrap (a login, or `ccswap daemon install`); for systemd it
+runs `systemctl --user daemon-reload`, and the unit takes effect at the service's next start. The hook
+needs no such care: it is the binary's path, which an update keeps.
 
 ## What ccswap never does
 

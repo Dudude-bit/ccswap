@@ -80,6 +80,11 @@ ccswap adopt work
   The refresh uses Claude Code's public OAuth client ID, the client `claude auth login` issued those
   logins to. Signing in always goes through Claude Code's own `claude auth login`: ccswap never sees
   your password.
+- **What ccswap asks GitHub.** The daemon asks
+  `GET https://api.github.com/repos/Dudude-bit/ccswap/releases/latest` for the newest release a minute
+  after it starts and then every 12 hours, with the user agent `ccswap/<version>` and nothing else;
+  `[update] check = false` in `config.toml` turns that off. `ccswap update` and the page's Update button ask it too, then
+  download the release's archive and `checksums.txt` from github.com.
 - **Tokens stay on this machine.** The logins of inactive accounts live in the macOS keychain (service
   `ccswap`) or, on Linux, in 0600 files in ccswap's folder. Apart from the requests to Anthropic above,
   they leave the machine only when you move an account with `ccswap migrate`, in an encrypted bundle.
@@ -166,11 +171,22 @@ cd ccswap
 make install
 ```
 
-**Updating.** Install the new binary the same way, then run `ccswap daemon install` again: it restarts
-the daemon on the new binary and points the service and the hook at it. Replace the file (`install`,
-`make install`) rather than copying over it: macOS kills a process whose binary was rewritten in place.
-`ccswap doctor` tells you if something still points at an old path. Claude Code sessions that are
-already running keep the hook they started with until you restart them.
+**Updating.** `ccswap update` installs the newest release over the ccswap you run it with: it downloads
+the archive for your platform, checks it against the release's `checksums.txt`, makes sure the new binary
+runs here and reports the release's version, and puts it in place with one rename. A daemon that runs that
+same file then restarts on it in its own process, as after the page's Update; the service, its proxy and
+locale settings, and the hook stay as they are. A daemon that runs another ccswap is left alone, and
+`ccswap update` names the binary to update instead. `ccswap update --check` only says
+whether a newer release is out. The daemon checks for one on its own (see
+[What ccswap asks GitHub](#terms-of-use)): `ccswap status` and the web page then say so, and the page
+has an Update button. A build without a version, such as `make install` from a checkout without tags,
+is not compared with releases: update it the way you built it.
+
+To update by hand, install the new binary the same way you installed it, then run `ccswap daemon install`
+again: it restarts the daemon on the new binary and points the service and the hook at it. Replace the
+file (`install`, `make install`) rather than copying over it: macOS kills a process whose binary was
+rewritten in place. `ccswap doctor` tells you if something still points at an old path. Claude Code
+sessions that are already running keep the hook they started with until you restart them.
 
 **Uninstalling.** First switch Claude Code to the account you want to keep: the other logins live only
 in ccswap's vault. Then `ccswap daemon uninstall` removes the service and the hook, and you delete the
@@ -233,6 +249,7 @@ ccswap auto on
 | `ccswap remote off` | Ask Anthropic for the limits again |
 | `ccswap migrate export <name>... [-o file] [--yes]` | Pack accounts into an encrypted bundle and remove them here |
 | `ccswap migrate import [file] [--code CODE] [--replace]` | Add the accounts of a bundle from a file, stdin or a paste |
+| `ccswap update [--check]` | Install the newest release and restart the daemon on it, or only say whether one is out |
 | `ccswap doctor` | Check the environment; exits with status 1 when a check fails |
 | `ccswap daemon install` / `uninstall` | Install (or reinstall and restart) the daemon's service and the hook, or remove them |
 | `ccswap daemon run` | Run the daemon in this terminal |
@@ -327,6 +344,18 @@ page you can change priorities, which accounts auto-switch may use, auto-switch 
 and the thresholds and check intervals (written to `config.toml`, whose comments are not kept, and used
 from the next check). You can also switch accounts. Updates arrive as they happen (server-sent events
 from `GET /v1/events`).
+
+When a newer ccswap release is out, the page says so, with a link to what is new. With the admin key,
+Update installs it the way `ccswap update` does: the daemon replaces its own binary, starts again on it in
+the same process, and the page reloads once the daemon is back. The service and the hook keep pointing at
+the same file. A page that only looks shows the command to run instead.
+
+As it starts, the daemon rewrites its service's definition (the LaunchAgent or the systemd unit) when it
+runs this daemon's binary and an update changed what `ccswap daemon install` writes. It keeps the binary,
+the log, and the environment in the file, so the proxy and the locale stay; a file with settings ccswap
+never writes (one you edited) stays as it is. It restarts nothing:
+launchd reads the new definition at your next login or `ccswap daemon install`, systemd (after the
+`daemon-reload` the daemon runs) at the service's next start.
 
 The page is served by the daemon's TCP listener at `http://127.0.0.1:8318/management.html` (`/`
 redirects there); `[t3] enabled = false` turns it off. Two keys guard it:
@@ -501,8 +530,8 @@ scp bin/ccswap server:/tmp/ccswap
 ssh server 'install -D -m 0755 /tmp/ccswap ~/.local/bin/ccswap && ~/.local/bin/ccswap daemon install'
 ```
 
-Update the same way: `scp` cannot write over the binary of a running daemon (`Text file busy`), while
-`install` replaces the file.
+Update with `ccswap update` on the server, or the same way: `scp` cannot write over the binary of a
+running daemon (`Text file busy`), while `install` replaces the file.
 
 **The daemon.** `ccswap daemon install` writes the user unit `~/.config/systemd/user/ccswap.service`,
 enables and restarts it, adds the hook and turns on linger, so the daemon keeps running after you leave
@@ -547,6 +576,9 @@ url = ""                  # another ccswap to take the limits from; ccswap remot
 
 [ui]
 lang = ""                 # a pinned language (en, ru); ccswap lang sets it; "" follows the locale
+
+[update]
+check = true              # ask GitHub for the newest ccswap release, a minute after start and every 12 hours
 ```
 
 `hysteresis` must be under both thresholds. The daemon reads `config.toml` when it starts: after

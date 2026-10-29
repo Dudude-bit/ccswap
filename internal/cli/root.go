@@ -54,6 +54,7 @@ func NewRoot(version string) *cobra.Command {
 		newLoginCmd(), newAdoptCmd(), newRemoveCmd(), newUseCmd(), newListCmd(), newStatusCmd(),
 		newPriorityCmd(), newEnableCmd(true), newEnableCmd(false), newAutoCmd(), newStrategyCmd(), newMigrateCmd(),
 		newT3Cmd(), newWebCmd(), newRemoteCmd(), newLangCmd(), newSignalCmd(), newDaemonCmd(), newDoctorCmd(), newTUICmd(),
+		newUpdateCmd(),
 	)
 	localizeHelp(root)
 	return root
