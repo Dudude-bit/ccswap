@@ -147,7 +147,6 @@ var notShown = map[string]string{
 	"no_entry":           "the unix socket only",
 	"duplicate":          "the unix socket only",
 	"remove_active":      "the unix socket only",
-	"active_account":     "the unix socket only",
 	"migrate_active":     "migrate is on the unix socket only",
 	"export_gone":        "migrate is on the unix socket only",
 	"export_done":        "migrate is on the unix socket only",

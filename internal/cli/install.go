@@ -77,6 +77,13 @@ func newInstallCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// the service gets no shell PATH (launchd's is /usr/bin:/bin): it keeps the claude this shell runs
+			if os.Getenv("CCSWAP_CLAUDE_BIN") == "" {
+				if p, err := exec.LookPath("claude"); err == nil && filepath.IsAbs(p) {
+					os.Setenv("CCSWAP_CLAUDE_BIN", p)
+					defer os.Unsetenv("CCSWAP_CLAUDE_BIN")
+				}
+			}
 			out := cmd.OutOrStdout()
 			svc := platformService()
 			var le *systemd.LingerError

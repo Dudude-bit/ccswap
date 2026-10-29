@@ -121,8 +121,9 @@ ccswap adopt work
 - ccswap never refreshes the login Claude Code is using: a refresh token works once, so refreshing it
   would log Claude Code out.
 - A login ends at a time Anthropic sets when you log in, and no token refresh moves it. Three days
-  ahead, the page raises an alert, the TUI flags the account and the daemon sends one notification: run
-  `ccswap login <name>`, or `/login` in `claude` for the account in use.
+  ahead, the page raises an alert, the TUI flags the account and the daemon sends one notification: log
+  in again with the page's Log in button or `ccswap login <name>`, or with `/login` in `claude` for the
+  account in use.
 
 [docs/how-it-works.md](docs/how-it-works.md) has the details: files, locks, identification, polling and
 the daemon's API.
@@ -330,14 +331,18 @@ page you can change priorities, which accounts auto-switch may use, auto-switch 
 and the thresholds and check intervals (written to `config.toml`, whose comments are not kept, and used
 from the next check). You can also switch accounts. The Login · token column shows when each login ends
 (in red within three days) and until when its token lasts; its button gets an account a new token now,
-which also shows whether its login still works. Updates arrive as they happen (server-sent events
-from `GET /v1/events`).
+which also shows whether its login still works. Once a login is close to its end or gone, the button is
+Log in instead: the daemon runs `claude auth login`, the page shows its sign-in link, and you paste back
+the code Claude shows after you sign in. Updates arrive as they happen (server-sent events from
+`GET /v1/events`).
 
 The page is served by the daemon's TCP listener at `http://127.0.0.1:8318/management.html` (`/`
 redirects there); `[t3] enabled = false` turns it off. Two keys guard it:
 
-- **The read key**, the one `ccswap t3` prints. Logged in with it, the page only shows. "Remember the
-  key on this device" keeps it after the tab closes.
+- **The read key**, the one `ccswap t3` prints. Logged in with it, the page only shows, and logs an
+  account in again: that works anywhere, as the daemon keeps a login only for the account with its email,
+  so nobody can finish one without signing in as that account. "Remember the key on this device" keeps
+  it after the tab closes.
 - **The admin key** changes settings. It is never printed and never put in a link: `ccswap web` asks the
   daemon for a one-time code (single use, valid for a minute) and opens `…/management.html#code=…`. The
   page trades the code for the admin key, drops the code from the address bar and keeps the key in the tab's
@@ -517,7 +522,8 @@ Without a systemd user session (a container, a bare SSH login) it tells you to r
 `ccswap daemon run` under tmux or a supervisor of your own, and leaves no unit file behind.
 
 **Logging in over SSH.** `ccswap login <name>` prints a link: open it in any browser, your phone's
-included, sign in, and paste the code at the `Paste code here` prompt.
+included, sign in, and paste the code at the `Paste code here` prompt. An account that is already here
+logs in again from the page as well, through any address the page is open at.
 
 **Each machine has its own logins.** Do not copy a login or ccswap's folder: a refresh token works once,
 and a copy used on another machine logs the original out. Run `ccswap login` or `ccswap adopt` on the
@@ -562,7 +568,9 @@ their keys and apply them at once; such a rewrite drops the file's comments.
 Environment:
 
 - `CCSWAP_HOME`: ccswap's folder (see above), as an absolute path.
-- `CCSWAP_CLAUDE_BIN`: the `claude` binary `ccswap login` runs; `claude` from `PATH` by default.
+- `CCSWAP_CLAUDE_BIN`: the `claude` binary `ccswap login` and a login from the page run; `claude` from
+  `PATH` by default. `ccswap daemon install` puts the `claude` your shell finds into the service, which
+  has no shell `PATH`.
 - `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` (either case) and `LC_ALL`, `LC_MESSAGES`, `LANG`:
   `ccswap daemon install` copies them from your shell into the service, so the daemon reaches Anthropic
   through the same proxy and speaks your language.
@@ -615,8 +623,9 @@ ccswap holds the logins of several accounts and runs a local HTTP listener. In s
 - In Claude Code's files ccswap writes only the `claudeAiOauth` key of its login item, `oauthAccount`
   in `~/.claude.json` and one `StopFailure` hook in `~/.claude/settings.json`.
 - The full API is on a Unix socket only your user can open. The TCP listener serves a part of it: the
-  read key only reads, settings need the admin key from `ccswap web` and a loopback listener, and a
-  forced switch, adding and removing accounts, `remote` and `migrate` are never served over TCP.
+  read key only reads and logs an account in again, settings need the admin key from `ccswap web` and a
+  loopback listener, and a forced switch, adding and removing accounts, `remote` and `migrate` are never
+  served over TCP.
 - The listener's read and admin keys last until you replace them. SECURITY.md says how to replace a
   leaked one.
 

@@ -104,8 +104,15 @@ func (f *fake) Activate(_ context.Context, n string, force bool) (api.Status, er
 func (f *fake) RefreshLogin(_ context.Context, n string) (api.Account, error) {
 	return api.Account{Name: n}, f.err
 }
-func (f *fake) SetAuto(context.Context, bool) error { return f.err }
-func (f *fake) Refresh(context.Context) error       { return f.err }
+func (f *fake) StartLogin(context.Context, string) (api.LoginLink, error) {
+	return api.LoginLink{}, f.err
+}
+func (f *fake) FinishLogin(_ context.Context, n, _ string) (api.Account, error) {
+	return api.Account{Name: n}, f.err
+}
+func (f *fake) CancelLogin(context.Context, string) error { return f.err }
+func (f *fake) SetAuto(context.Context, bool) error       { return f.err }
+func (f *fake) Refresh(context.Context) error             { return f.err }
 func (f *fake) SetThresholds(_ context.Context, t api.Thresholds) (api.Thresholds, error) {
 	return t, f.err
 }
@@ -857,8 +864,8 @@ func TestCleanupSparesLiveLogin(t *testing.T) {
 	for _, d := range []string{stale, filepath.Dir(target)} {
 		os.Chtimes(d, old, old)
 	}
-	sweepStale(home, target, kc)
-	cleanupLogin(link, target, kc, false)
+	daemon.SweepLogins(home, target, kc)
+	daemon.DropLogin(link, target, kc, false)
 	if b, err := os.ReadFile(target); err != nil || string(b) != "live" {
 		t.Fatalf("live login deleted: %q %v", b, err)
 	}

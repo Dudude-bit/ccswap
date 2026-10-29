@@ -6,12 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -23,8 +20,8 @@ import (
 	"github.com/Dudude-bit/ccswap/internal/api"
 	"github.com/Dudude-bit/ccswap/internal/claudecode"
 	"github.com/Dudude-bit/ccswap/internal/config"
+	"github.com/Dudude-bit/ccswap/internal/daemon"
 	"github.com/Dudude-bit/ccswap/internal/i18n"
-	"github.com/Dudude-bit/ccswap/internal/keychain"
 	"github.com/Dudude-bit/ccswap/internal/tui"
 )
 
@@ -66,25 +63,22 @@ func newLoginCmd() *cobra.Command {
 			}
 			target := claudecode.ServiceName(cfg.Claude.ConfigDir)
 			kc := newKeychain(home)
-			sweepStale(home, target, kc)
+			daemon.SweepLogins(home, target, kc)
 			dir, err := os.MkdirTemp(home, "login-*")
 			if err != nil {
 				return err
 			}
 			ok := false
-			defer func() { cleanupLogin(dir, target, kc, ok) }()
+			defer func() { daemon.DropLogin(dir, target, kc, ok) }()
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 			defer stop()
 			out := cmd.OutOrStdout()
 			fmt.Fprintln(out, i18n.T("login.other_device_hint"))
-			bin := os.Getenv("CCSWAP_CLAUDE_BIN")
-			if bin == "" {
-				bin = "claude"
-			}
+			bin := claudecode.Bin()
 			p := exec.CommandContext(ctx, bin, "auth", "login")
 			p.Cancel = func() error { return p.Process.Signal(syscall.SIGTERM) }
 			p.WaitDelay = 5 * time.Second
-			p.Env = append(slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "CLAUDE_SECURESTORAGE_CONFIG_DIR=") }), "CLAUDE_CONFIG_DIR="+dir)
+			p.Env = claudecode.LoginEnv(dir)
 			p.Stdout, p.Stderr = out, cmd.ErrOrStderr()
 			stdin, err := p.StdinPipe()
 			if err != nil {
@@ -129,48 +123,12 @@ func pasteCodes(r io.Reader, w io.WriteCloser, out io.Writer) {
 	defer w.Close()
 	sc := bufio.NewScanner(r)
 	for sc.Scan() {
-		line := authCode(sc.Text())
+		line := claudecode.AuthCode(sc.Text())
 		if line != "" {
 			fmt.Fprintln(out, i18n.T("login.checking_code"))
 		}
 		if _, err := io.WriteString(w, line+"\n"); err != nil {
 			return
-		}
-	}
-}
-
-func authCode(s string) string {
-	s = strings.TrimSpace(s)
-	if u, err := url.Parse(s); err == nil && u.Scheme != "" {
-		if q := u.Query(); q.Get("code") != "" && q.Get("state") != "" {
-			return q.Get("code") + "#" + q.Get("state")
-		}
-	}
-	return s
-}
-
-// cleanupLogin removes a temp login dir; unless the import succeeded (the daemon then deletes them
-// itself) it also deletes any keychain item claude created under the dir's hashed service. A dir
-// that is the live login's (target) is left alone.
-func cleanupLogin(dir, target string, kc keychain.Store, imported bool) {
-	svcs, ok := claudecode.LoginServices(dir, target)
-	if !ok {
-		return
-	}
-	if !imported {
-		for _, s := range svcs {
-			_ = kc.Delete(s, claudecode.KeychainAccount())
-		}
-	}
-	_ = os.RemoveAll(dir)
-}
-
-// sweepStale cleans login dirs left by a killed ccswap.
-func sweepStale(home, target string, kc keychain.Store) {
-	ds, _ := filepath.Glob(filepath.Join(home, "login-*"))
-	for _, d := range ds {
-		if st, err := os.Stat(d); err == nil && time.Since(st.ModTime()) > time.Hour {
-			cleanupLogin(d, target, kc, false)
 		}
 	}
 }

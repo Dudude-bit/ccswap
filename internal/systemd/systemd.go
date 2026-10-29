@@ -100,8 +100,8 @@ func Unit(binPath, home string) []byte {
 	log := "append:" + strings.ReplaceAll(filepath.Join(home, "daemon.log"), "%", "%%")
 	fmt.Fprintf(&b, "[Unit]\nDescription=%s\n\n[Service]\nExecStart=%s daemon run\nRestart=on-failure\nRestartPreventExitStatus=%d %d\nRestartSec=5\nKillSignal=SIGTERM\nTimeoutStopSec=30\nStandardOutput=%s\nStandardError=%s\nEnvironment=%s\n",
 		i18n.T("systemd.unit_description"), quote(binPath, true), alreadyRunning, exConfig, log, log, quote("CCSWAP_HOME="+home, false))
-	// the locale picks the language of the daemon's messages
-	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "LC_ALL", "LC_MESSAGES", "LANG"} {
+	// the locale picks the language of the daemon's messages; CCSWAP_CLAUDE_BIN, the claude a login from the page runs
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "LC_ALL", "LC_MESSAGES", "LANG", "CCSWAP_CLAUDE_BIN"} {
 		if v := os.Getenv(k); v != "" {
 			fmt.Fprintf(&b, "Environment=%s\n", quote(k+"="+v, false))
 		}

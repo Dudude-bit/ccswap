@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Dudude-bit/ccswap/internal/claudecode"
 	"github.com/Dudude-bit/ccswap/internal/keychain"
@@ -138,4 +140,30 @@ func (im *Importer) Import(ctx context.Context, name, configDir string, priority
 		return err
 	})
 	return out, err
+}
+
+// DropLogin removes a login dir; unless the import succeeded (the importer then deletes them itself)
+// it also deletes any keychain item claude created under the dir's hashed service. A dir that is the
+// live login's (target) is left alone.
+func DropLogin(dir, target string, kc keychain.Store, imported bool) {
+	svcs, ok := claudecode.LoginServices(dir, target)
+	if !ok {
+		return
+	}
+	if !imported {
+		for _, s := range svcs {
+			_ = kc.Delete(s, claudecode.KeychainAccount())
+		}
+	}
+	_ = os.RemoveAll(dir)
+}
+
+// SweepLogins drops the login dirs of home left over an hour ago by a killed ccswap login or daemon.
+func SweepLogins(home, target string, kc keychain.Store) {
+	ds, _ := filepath.Glob(filepath.Join(home, "login-*"))
+	for _, d := range ds {
+		if st, err := os.Stat(d); err == nil && time.Since(st.ModTime()) > time.Hour {
+			DropLogin(d, target, kc, false)
+		}
+	}
 }

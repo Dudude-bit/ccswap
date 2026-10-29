@@ -45,6 +45,11 @@ type Core interface {
 	Refresh(ctx context.Context) error
 	// RefreshLogin refreshes one account's login in the vault now.
 	RefreshLogin(ctx context.Context, name string) (api.Account, error)
+	// StartLogin runs claude auth login for an account and returns its sign-in link; FinishLogin hands
+	// it the code the sign-in showed and stores the login; CancelLogin drops the link.
+	StartLogin(ctx context.Context, name string) (api.LoginLink, error)
+	FinishLogin(ctx context.Context, name, code string) (api.Account, error)
+	CancelLogin(ctx context.Context, name string) error
 	Signal(ctx context.Context, payload map[string]any) error
 	// WebCode mints a one-time code that the TCP listener trades for its admin key; UseWebCode takes
 	// it, once.
@@ -127,6 +132,20 @@ func (s strict) Refresh(ctx context.Context, _ api.RefreshRequestObject) (api.Re
 func (s strict) RefreshLogin(ctx context.Context, r api.RefreshLoginRequestObject) (api.RefreshLoginResponseObject, error) {
 	a, err := s.c.RefreshLogin(ctx, r.Name)
 	return api.RefreshLogin200JSONResponse(a), err
+}
+
+func (s strict) StartLogin(ctx context.Context, r api.StartLoginRequestObject) (api.StartLoginResponseObject, error) {
+	l, err := s.c.StartLogin(ctx, r.Name)
+	return api.StartLogin200JSONResponse(l), err
+}
+
+func (s strict) FinishLogin(ctx context.Context, r api.FinishLoginRequestObject) (api.FinishLoginResponseObject, error) {
+	a, err := s.c.FinishLogin(ctx, r.Name, r.Body.Code)
+	return api.FinishLogin200JSONResponse(a), err
+}
+
+func (s strict) CancelLogin(ctx context.Context, r api.CancelLoginRequestObject) (api.CancelLoginResponseObject, error) {
+	return api.CancelLogin204Response{}, s.c.CancelLogin(ctx, r.Name)
 }
 
 func (s strict) Signal(ctx context.Context, r api.SignalRequestObject) (api.SignalResponseObject, error) {
@@ -215,6 +234,10 @@ func classify(err error) (int, api.Error) {
 		return 400, api.Error{Code: "invalid_config_dir", Message: err.Error()}
 	case errors.Is(err, ErrLoginIncomplete):
 		return 400, api.Error{Code: "login_incomplete", Message: err.Error()}
+	case errors.Is(err, ErrEmptyCode):
+		return 400, api.Error{Code: "bad_request", Message: err.Error()}
+	case errors.Is(err, ErrCodeRefused):
+		return 400, api.Error{Code: "code_refused", Message: err.Error()}
 	case errors.Is(err, migrate.ErrNotBundle):
 		return 400, api.Error{Code: "not_bundle", Message: i18n.T("daemon.not_bundle")}
 	case errors.Is(err, migrate.ErrNewerVersion):
@@ -235,6 +258,10 @@ func classify(err error) (int, api.Error) {
 		return 409, api.Error{Code: "active_account", Message: err.Error()}
 	case errors.Is(err, ErrClaudeOwns):
 		return 409, api.Error{Code: "claude_owns", Message: err.Error()}
+	case errors.Is(err, ErrLoginGone):
+		return 409, api.Error{Code: "login_gone", Message: err.Error()}
+	case errors.Is(err, ErrWrongAccount):
+		return 409, api.Error{Code: "wrong_account", Message: err.Error()}
 	case errors.Is(err, switcher.ErrNearRefresh):
 		return 409, api.Error{Code: "near_refresh", Message: err.Error()}
 	case errors.Is(err, switcher.ErrTargetRefreshing):
@@ -266,6 +293,9 @@ func classify(err error) (int, api.Error) {
 		return 502, api.Error{Code: "bundle_unchecked", Message: err.Error()}
 	case errors.Is(err, ErrRefreshFailed):
 		return 502, api.Error{Code: "refresh_failed", Message: err.Error()}
+	case errors.Is(err, ErrLoginFailed):
+		slog.Warn("api: login failed", "err", err)
+		return 502, api.Error{Code: "login_failed", Message: err.Error()}
 	case errors.Is(err, ErrBadCode):
 		return 403, api.Error{Code: "bad_code", Message: err.Error()}
 	}
@@ -291,24 +321,28 @@ const (
 	readKey  access = iota // the read key (T3 Code, ccswap remote, the page's view) or the admin key
 	adminKey               // the admin key, and a listener on a loopback address
 	codeOnly               // no key, a one-time code from `ccswap web` in the body; a loopback listener
+	anyKey                 // either key, on any listener and Host: a new login, which only the account's own sign-in finishes
 	noKey                  // nothing: the page's texts, which its login screen needs first and which hold no secret
 )
 
 // tcpRoutes is the part of the API the TCP listener serves, by what each route asks for; the rest
 // (login, adopt, remove, the hook signal, remote, web codes, migrate) is served on the unix socket only.
 var tcpRoutes = map[string]access{
-	"GET /v1/status":                   readKey,
-	"GET /v1/accounts":                 readKey,
-	"GET /v1/events":                   readKey,
-	"PATCH /v1/accounts/:name":         adminKey,
-	"POST /v1/accounts/:name/activate": adminKey,
-	"POST /v1/accounts/:name/refresh":  adminKey,
-	"PUT /v1/auto":                     adminKey,
-	"PUT /v1/strategy":                 adminKey,
-	"PUT /v1/thresholds":               adminKey,
-	"POST /v1/refresh":                 adminKey,
-	"POST /v1/web/session":             codeOnly,
-	"GET /v1/i18n/:lang":               noKey,
+	"GET /v1/status":                     readKey,
+	"GET /v1/accounts":                   readKey,
+	"GET /v1/events":                     readKey,
+	"PATCH /v1/accounts/:name":           adminKey,
+	"POST /v1/accounts/:name/activate":   adminKey,
+	"POST /v1/accounts/:name/refresh":    adminKey,
+	"POST /v1/accounts/:name/login":      anyKey,
+	"DELETE /v1/accounts/:name/login":    anyKey,
+	"POST /v1/accounts/:name/login/code": anyKey,
+	"PUT /v1/auto":                       adminKey,
+	"PUT /v1/strategy":                   adminKey,
+	"PUT /v1/thresholds":                 adminKey,
+	"POST /v1/refresh":                   adminKey,
+	"POST /v1/web/session":               codeOnly,
+	"GET /v1/i18n/:lang":                 noKey,
 }
 
 // httpKeys are the TCP listener's keys; local: it listens on a loopback address.
@@ -320,7 +354,8 @@ type httpKeys struct {
 // gate lets a request through to a route that asks for a. A change needs the admin key on a loopback
 // listener: the read key in T3 Code or another ccswap, and a listener open to the network, only look.
 // A change must also name a loopback host, so a site whose name a DNS rebinding pointed at
-// 127.0.0.1 cannot trade a code or use a key it got.
+// 127.0.0.1 cannot trade a code or use a key it got. A new login is the exception: the store keeps it
+// only as the account's own email's, so whoever holds a key can at most start one the owner finishes.
 func (k httpKeys) gate(a access) fiber.Handler {
 	return func(c fiber.Ctx) error {
 		admin := t3.Carries(c, k.admin)
@@ -328,7 +363,7 @@ func (k httpKeys) gate(a access) fiber.Handler {
 		case a == noKey:
 		case a != codeOnly && !admin && !t3.Carries(c, k.read):
 			return c.Status(fiber.StatusUnauthorized).JSON(api.Error{Code: "unauthorized", Message: i18n.T("daemon.bad_key")})
-		case a != readKey && (!k.local || !loopbackHost(string(c.Request().Host()))):
+		case a != readKey && a != anyKey && (!k.local || !loopbackHost(string(c.Request().Host()))):
 			return c.Status(fiber.StatusForbidden).JSON(api.Error{Code: "local_only", Message: i18n.T("daemon.settings_local_only")})
 		case a == adminKey && !admin:
 			return c.Status(fiber.StatusForbidden).JSON(api.Error{Code: "read_only", Message: i18n.T("daemon.read_only_key")})

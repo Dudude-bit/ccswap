@@ -23,6 +23,7 @@ colors:
   alert-edge: "#5a6a7e"
   selection: "rgb(61 106 214 / .22)"
   skeleton: "#e5e8eb"
+  scrim: "rgb(29 42 58 / .4)"
   board-dark: "#11161d"
   surface-dark: "#18202a"
   raise-dark: "#1e2833"
@@ -44,6 +45,7 @@ colors:
   alert-edge-dark: "#8a96a4"
   selection-dark: "rgb(85 131 234 / .38)"
   skeleton-dark: "#1e2732"
+  scrim-dark: "rgb(5 8 12 / .65)"
   tag-0-signal-orange: "#d4621c"
   tag-1-ochre: "#b07c0a"
   tag-2-field-green: "#3f9a4a"
@@ -265,6 +267,7 @@ The eight tag colours (`tag-0` to `tag-7`) are identity, not status. Each is the
 - **Highlight** (`highlight`, `highlight-solid`): the linked hover of a rota lane and its table row; the solid variant sits behind labels that must cover what is under them.
 - **Alert** (`alert-ground`, `alert-text`, `alert-muted`, `alert-code`, `alert-edge`): the inverted strip. On light it is ink with white text; on dark it is the pale ink with board text.
 - **Selection** (`selection`) and **Skeleton** (`skeleton`): text selection and the loading placeholders.
+- **Scrim** (`scrim`): the backdrop under the login dialog, the page's only modal.
 
 ### Named Rules
 **The Flat Tag Rule.** An account colour is used at full strength as a solid fill, an outline, a dash or a hatch, never as a tint, gradient or transparent wash. There are two exceptions. Disabled is greyscale, not a lighter tag. The next account's outline fades out over its last 48px, because its end is not known; the fade ends the outline and never tints a fill.
@@ -366,7 +369,7 @@ The legend above the rota draws these in ink (needs login in muted ink, disabled
 - **Interaction:** one lane is a tab stop; arrow keys, Home and End move between lanes. A lane's accessible name gives its state, its next change and the shifts it held in the window. Hovering or focusing a lane highlights the same account's table row, and the reverse.
 
 ### Accounts table
-- Header in 12px muted with an edge rule; rows 48px with line dividers. Columns: account (chip, name in 600, optional email), state (swatch from the state vocabulary, word, muted detail), 5-hour and weekly usage lines (right-aligned percentage, 6px mini bar with muted tick, muted reset), per-model (hidden when no account has one), next change, login and token (the login's end over the token's in muted, times alone with the words in their titles; the login's end in critical red within three days; a 28px icon button beside them that gets a new token, hidden for the account in use and one that needs a login, its icon spinning while it asks), priority stepper, auto switch, and the Use button (or a muted "in use"). A row's note or error strip sits beneath it, indented to the name.
+- Header in 12px muted with an edge rule; rows 48px with line dividers. Columns: account (chip, name in 600, optional email), state (swatch from the state vocabulary, word, muted detail), 5-hour and weekly usage lines (right-aligned percentage, 6px mini bar with muted tick, muted reset), per-model (hidden when no account has one), next change, login and token (the login's end over the token's in muted, times alone with the words in their titles; the login's end in critical red within three days; a 28px icon button beside them that gets a new token, hidden for the account in use and one that needs a login, its icon spinning while it asks; for a login that is gone or ends within three days a default Log in button stands in its place, read-only pages included), priority stepper, auto switch, and the Use button (or a muted "in use"). A row's note or error strip sits beneath it, indented to the name.
 
 ### Buttons
 - **Shape:** 4px radius, 32px tall (40px on coarse pointers), 0 12px padding, weight 500, a 4px invisible hit-area extension.
@@ -383,12 +386,18 @@ The legend above the rota draws these in ink (needs login in muted ink, disabled
 - **Stepper:** 28px square −/+ buttons around a borderless 44px number that shows an edge border on hover.
 
 ### Strips and alerts
-- **Alert strip:** full width, the inverted alert palette, 4px radius, min 44px. Shown only when the user must act (daemon unreachable, all exhausted, a login ccswap does not know, needs login, a login ending within three days), gravest first. Buttons inside are outlined in alert-edge; focus rings switch to alert text.
+- **Alert strip:** full width, the inverted alert palette, 4px radius, min 44px. Shown only when the user must act (daemon unreachable, all exhausted, a login ccswap does not know, needs login, a login ending within three days), gravest first. A login alert of an account not in use carries a Log in button before its Copy command. Buttons inside are outlined in alert-edge; focus rings switch to alert text.
 - **Message strip:** surface ground with a 1px border; critical (red border and text) for errors, warn (edge border, ink text) for advisories; the fault variant carries a Reload button and a report link.
 - **Note:** 13px muted line for the read-only notice and host notes.
 
+### Login dialog
+- **Shape:** a native modal dialog on the login card's language: surface ground, 1px edge border, 6px radius, no shadow, 24px padding, 460px wide; the scrim behind it. Below 720px it is a bottom sheet: full width, top corners rounded, the safe-area inset under its buttons.
+- **Content:** the account's chip and "Log in to … again" as a 20px/600 title, the email to sign in as in ink inside a muted line, then two numbered steps, each number in a 22px edge-bordered square with a 3px radius. Step one holds the sign-in link as a default button with an external-link icon and a quiet Copy link; step two the code field with its hint (until when the link works). A line rule separates the primary Log in and the quiet Cancel.
+- **States:** while the daemon gets the link, a spinner and "Getting a link…" stand in for the buttons and the field and Log in are disabled. A refused code, another account's sign-in, an expired link or a failed start shows its message in 12.5px critical (under the field, or under step one for a start) and swaps the link for Get a new link, which takes the focus; a code that never left keeps the link. Success closes the dialog with no toast: the row's new login end is the confirmation, and the focus goes back to the button that opened it or the row.
+- **Close:** Cancel or Escape drops the link, which stops the daemon's `claude auth login`.
+
 ### Read-only and offline
-- **Read-only:** the same page. Admin-only controls are removed from layout; values that were inputs render as plain 16px/500 values sized to their content; the top bar shows auto-switch and strategy as a muted sentence.
+- **Read-only:** the same page. Admin-only controls are removed from layout; Log in stays, as either key renews a login; values that were inputs render as plain 16px/500 values sized to their content; the top bar shows auto-switch and strategy as a muted sentence.
 - **Offline:** the alert strip states the error and the time of the data on screen, announced as an alert once per change of text; the status dot turns critical; the rota stops at the data's time and its now flag says so; every control that asks the daemon is disabled with an explanatory title, and wakes when the daemon is back.
 - **Loading:** skeleton blocks in the skeleton colour, 6px radius, appear only after 300ms.
 

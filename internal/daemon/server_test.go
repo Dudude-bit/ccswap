@@ -71,6 +71,18 @@ func (f *fakeCore) RefreshLogin(_ context.Context, n string) (api.Account, error
 	f.rec("refresh login " + n)
 	return api.Account{Name: n}, f.err
 }
+func (f *fakeCore) StartLogin(_ context.Context, n string) (api.LoginLink, error) {
+	f.rec("start login " + n)
+	return api.LoginLink{Url: "https://claude.example/oauth/authorize?state=s"}, f.err
+}
+func (f *fakeCore) FinishLogin(_ context.Context, n, code string) (api.Account, error) {
+	f.rec("finish login " + n + " " + code)
+	return api.Account{Name: n}, f.err
+}
+func (f *fakeCore) CancelLogin(_ context.Context, n string) error {
+	f.rec("cancel login " + n)
+	return f.err
+}
 func (f *fakeCore) Activate(_ context.Context, n string, force bool) (api.Status, error) {
 	f.rec("activate " + n)
 	f.force = force
@@ -710,6 +722,42 @@ func TestChangesNeedALoopbackHost(t *testing.T) { // DNS rebinding: a foreign na
 		if r := httpDoHost(t, app, host, "POST", "/v1/refresh", keys.admin, ""); r.StatusCode != 204 {
 			t.Errorf("Host %q: %d", host, r.StatusCode)
 		}
+	}
+}
+
+// TestLoginTakesEitherKeyAnywhere: a new login of an account needs a key, but not the admin key, a
+// loopback listener or a loopback Host: only that account's own sign-in can finish it.
+func TestLoginTakesEitherKeyAnywhere(t *testing.T) {
+	logins := []route{
+		{"POST", "/v1/accounts/b/login", ""},
+		{"POST", "/v1/accounts/b/login/code", `{"code":"C1#S1"}`},
+		{"DELETE", "/v1/accounts/b/login", ""},
+	}
+	f := &fakeCore{}
+	off := keys
+	off.local = false
+	for _, app := range []*fiber.App{newHTTPApp(f, fakeHub{}, keys), newHTTPApp(f, fakeHub{}, off)} {
+		for _, key := range []string{"", "wrong"} {
+			for _, c := range logins {
+				if r := httpDo(t, app, c.method, c.path, key, c.body); r.StatusCode != 401 {
+					t.Errorf("key %q, %s %s: %d", key, c.method, c.path, r.StatusCode)
+				}
+			}
+		}
+		if len(f.calls) != 0 {
+			t.Fatalf("unauthorized logins reached the core: %v", f.calls)
+		}
+		for _, key := range []string{keys.read, keys.admin} {
+			for _, c := range logins {
+				if r := httpDoHost(t, app, "ccswap.example.com", c.method, c.path, key, c.body); r.StatusCode/100 != 2 {
+					t.Errorf("key %q, %s %s under another Host: %d", key, c.method, c.path, r.StatusCode)
+				}
+			}
+		}
+		if want := []string{"start login b", "finish login b C1#S1", "cancel login b"}; !slices.Equal(f.calls, append(want, want...)) {
+			t.Fatalf("calls %v", f.calls)
+		}
+		f.calls = nil
 	}
 }
 

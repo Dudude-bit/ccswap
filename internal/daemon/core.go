@@ -137,14 +137,15 @@ type Daemon struct {
 	last       time.Time              // end of the last usage poll
 	reset      string                 // earliest reset of the last all-exhausted notice
 	rem        remote
-	activity   time.Time             // newest transcript write, as of the last tick
-	activityOK bool                  // activity was read; a failed read never lets cache-aware climb
-	logged     map[string]string     // per topic, the last line logged; repeats are not logged
-	codes      map[string]time.Time  // one-time codes of `ccswap web`, by expiry
-	migrations map[string]*migration // migrate exports by token; in memory, so a restart cancels them
-	unspent    map[string]bool       // imported logins whose bundle refresh token is not spent yet: refreshed by force
-	kept       map[string]string     // sha256 of a bundle refresh token a failed import spent → the account keeping its pair
-	listen     string                // the TCP listener's address while it serves; "" = off
+	activity   time.Time                // newest transcript write, as of the last tick
+	activityOK bool                     // activity was read; a failed read never lets cache-aware climb
+	logged     map[string]string        // per topic, the last line logged; repeats are not logged
+	codes      map[string]time.Time     // one-time codes of `ccswap web`, by expiry
+	migrations map[string]*migration    // migrate exports by token; in memory, so a restart cancels them
+	unspent    map[string]bool          // imported logins whose bundle refresh token is not spent yet: refreshed by force
+	kept       map[string]string        // sha256 of a bundle refresh token a failed import spent → the account keeping its pair
+	listen     string                   // the TCP listener's address while it serves; "" = off
+	logins     map[string]*pendingLogin // the page's logins waiting for a code, by account
 }
 
 func New(o Options) *Daemon {
@@ -173,6 +174,7 @@ func New(o Options) *Daemon {
 		migrations: map[string]*migration{},
 		unspent:    map[string]bool{},
 		kept:       map[string]string{},
+		logins:     map[string]*pendingLogin{},
 	}
 	th := o.Config.Thresholds
 	d.thr.Store(&th)
@@ -199,6 +201,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	defer release()
+	SweepLogins(d.o.Home, d.im.Target, d.o.KC)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	context.AfterFunc(ctx, d.bus.close)

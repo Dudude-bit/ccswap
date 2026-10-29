@@ -256,11 +256,25 @@ web page, part of the API and the T3 Code hub:
 | `GET /v1/status`, `GET /v1/accounts`, `GET /v1/events` | the read key or the admin key |
 | `PATCH /v1/accounts/{name}`, `POST /v1/accounts/{name}/activate` (never forced), `PUT /v1/auto`, `PUT /v1/strategy`, `PUT /v1/thresholds`, `POST /v1/refresh`, `POST /v1/accounts/{name}/refresh` | the admin key, a listener on a loopback address, and a `Host` that names a loopback address or `localhost` |
 | `POST /v1/web/session`: trades a one-time code from `ccswap web` for the admin key | the code, a loopback listener and a loopback `Host` |
+| `POST /v1/accounts/{name}/login`, `POST /v1/accounts/{name}/login/code`, `DELETE /v1/accounts/{name}/login`: an account's new login from the page | the read key or the admin key, on any listener and `Host` |
 | `GET /v0/management/auth-files`, `POST /v0/management/api-call`, `POST /v0/management/reset-quota`: the part of CLIProxyAPI's management API T3 Code reads | the read key or the admin key |
 
-Everything else, such as adding, logging in and removing accounts, a forced switch, the hook signal,
-`remote`, `migrate`, the language and the web codes, is served on the socket only. The `Host` check
-stops a site whose name was pointed at 127.0.0.1 (DNS rebinding) from changing anything.
+Everything else, such as adding and removing accounts, a forced switch, the hook signal, `remote`,
+`migrate`, the language and the web codes, is served on the socket only. The `Host` check stops a site
+whose name was pointed at 127.0.0.1 (DNS rebinding) from changing anything.
+
+**A login from the page** renews an account that is already here. `POST /v1/accounts/{name}/login`
+makes a `login-*` folder, runs `claude auth login` in it as `ccswap login` does (`CCSWAP_CLAUDE_BIN`,
+else `claude` from `PATH`) and answers with the sign-in link it prints, within 30 seconds. The code the
+sign-in shows goes to `POST /v1/accounts/{name}/login/code`, which writes it to claude and imports the
+login it gets as `ccswap login` would: an account whose email differs is refused (`409
+wrong_account`). A link takes one code: a refused one (`400 code_refused`) spends it, as it spends
+claude's sign-in. A link waits 10 minutes, one per account: a new one, `DELETE` or a daemon restart stops
+its claude and drops its folder, and a code for it then gets `409 login_gone`. Claude did not start or
+gave no link: `502 login_failed`. The account Claude Code uses is refused (`409 active_account`), as
+its login is Claude Code's to renew. These routes take the read key anywhere: the PKCE verifier of the
+sign-in stays inside the daemon's claude, so a code is no use elsewhere, and the import's email check
+means a key holder can at most start a login that only the account's owner can finish.
 
 The hub routes answer as T3 Code expects: `auth-files` lists the accounts (name, email, whether they are
 off), `api-call` accepts only `GET https://api.anthropic.com/api/oauth/usage` for one account and
