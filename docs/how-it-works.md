@@ -246,7 +246,7 @@ web page, part of the API and the T3 Code hub:
 | The page and its files (`/management.html`, scripts, styles, fonts), with a Content Security Policy that allows nothing from other origins | nothing: they hold no data |
 | `GET /v1/i18n/<tag>`, the page's texts | nothing: they hold no secret |
 | `GET /v1/status`, `GET /v1/accounts`, `GET /v1/events` | the read key or the admin key |
-| `PATCH /v1/accounts/{name}`, `POST /v1/accounts/{name}/activate` (never forced), `PUT /v1/auto`, `PUT /v1/strategy`, `PUT /v1/thresholds`, `POST /v1/refresh` | the admin key, a listener on a loopback address, and a `Host` that names a loopback address or `localhost` |
+| `PATCH /v1/accounts/{name}`, `POST /v1/accounts/{name}/activate` (never forced), `PUT /v1/auto`, `PUT /v1/strategy`, `PUT /v1/thresholds`, `POST /v1/refresh`, `POST /v1/update` | the admin key, a listener on a loopback address, and a `Host` that names a loopback address or `localhost` |
 | `POST /v1/web/session`: trades a one-time code from `ccswap web` for the admin key | the code, a loopback listener and a loopback `Host` |
 | `GET /v0/management/auth-files`, `POST /v0/management/api-call`, `POST /v0/management/reset-quota`: the part of CLIProxyAPI's management API T3 Code reads | the read key or the admin key |
 
@@ -260,6 +260,24 @@ returns its usage answer as described above, and `reset-quota` does nothing.
 
 `GET /v1/events` is a stream of server-sent events: a `state` event with the status and the accounts at
 once and after each change, and a `: ping` comment every 15 seconds.
+
+## Updates
+
+With `[update] check` on (the default), the daemon asks GitHub for the newest release a minute after it
+starts, so a daemon that keeps restarting does not ask on every start, and then every 12 hours. When that
+release is newer than the build it runs, the status carries it as `update`, which `ccswap status` and the
+page show. Versions compare as semver: a Go pseudo-version from `go install …@<commit>` sorts after the
+tag it follows, and so does a `make build` name such as `v0.1.1-5-g90b77e9`. A build without a version
+(`dev`) is never offered an update.
+
+`POST /v1/update` asks GitHub again, installs the release over the binary the daemon runs (the steps are
+in [SECURITY.md](../SECURITY.md#updates)), answers, and stops the daemon as on SIGTERM: it saves pending
+tokens and closes the socket and the listener. Then the daemon execs the new binary in the same process,
+so launchd, systemd or the terminal that started it keeps it, and the new daemon takes the lock and the
+socket as on any start. Should exec fail, the daemon exits 1 and its service starts the new file. The
+service and the hook already point at that path, so nothing else changes; only a release that changes
+what `ccswap daemon install` writes needs that command run again, which `ccswap update` does by itself:
+it runs the new binary's `ccswap daemon install` when the service is installed.
 
 ## What ccswap never does
 

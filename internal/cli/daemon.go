@@ -43,6 +43,7 @@ func newDaemonCmd() *cobra.Command {
 				return cannotStart(err)
 			}
 			version := cmd.Root().Version
+			bin, _ := selfBin() // without it an update fails and says why; the daemon still runs
 			kc := newKeychain(home)
 			st, err := store.Open(home, kc)
 			if err != nil {
@@ -62,11 +63,16 @@ func newDaemonCmd() *cobra.Command {
 			slog.Info("ccswap daemon starting", "version", version, "home", home)
 			err = daemon.New(daemon.Options{
 				Config: cfg, Store: st, KC: kc, API: client, Switcher: sw, Notifier: platformNotifier(),
-				Home: home, Socket: sock, Version: version, Host: hostname(),
+				Home: home, Socket: sock, Version: version, Host: hostname(), Bin: bin,
 				Projects: claudecode.ProjectsDir(userHome, cfg.Claude.ConfigDir),
 			}).Run(ctx)
 			if errors.Is(err, daemon.ErrAlreadyRunning) {
 				return &ExitError{Code: noRestartExit(daemon.ExitAlreadyRunning), Err: err}
+			}
+			if errors.Is(err, daemon.ErrRestart) {
+				slog.Info("ccswap daemon restarting on the updated binary", "bin", bin)
+				// exec keeps the process launchd, systemd or a terminal started; failing, it exits 1 and is restarted
+				return execSelf(bin, os.Args, os.Environ())
 			}
 			return err
 		},
@@ -74,6 +80,9 @@ func newDaemonCmd() *cobra.Command {
 	d.AddCommand(newInstallCmd(), newUninstallCmd(), newDaemonStatusCmd())
 	return d
 }
+
+// execSelf is syscall.Exec; a test seam.
+var execSelf = syscall.Exec
 
 // cannotStart stops a daemon whose files or folders are unusable: every start would fail the same way
 // and add to daemon.log.

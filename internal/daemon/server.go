@@ -54,6 +54,8 @@ type Core interface {
 	MigrateCommit(ctx context.Context, token string) error
 	MigrateCancel(ctx context.Context, token string) error
 	MigrateImport(ctx context.Context, r api.MigrateImportRequest) (api.MigrateImport, error)
+	// InstallUpdate installs the newest release over the daemon's binary, then restarts the daemon on it.
+	InstallUpdate(ctx context.Context) (api.Release, error)
 	// Version is the build the daemon runs.
 	Version() string
 }
@@ -147,6 +149,11 @@ func (s strict) MigrateCancel(ctx context.Context, r api.MigrateCancelRequestObj
 func (s strict) MigrateImport(ctx context.Context, r api.MigrateImportRequestObject) (api.MigrateImportResponseObject, error) {
 	x, err := s.c.MigrateImport(ctx, *r.Body)
 	return api.MigrateImport200JSONResponse(x), err
+}
+
+func (s strict) InstallUpdate(ctx context.Context, _ api.InstallUpdateRequestObject) (api.InstallUpdateResponseObject, error) {
+	r, err := s.c.InstallUpdate(ctx)
+	return api.InstallUpdate200JSONResponse(r), err
 }
 
 // OpenWebSession hands out the admin key the TCP listener holds, which the unix socket does not know.
@@ -257,6 +264,12 @@ func classify(err error) (int, api.Error) {
 		return 502, api.Error{Code: "bundle_unchecked", Message: err.Error()}
 	case errors.Is(err, ErrBadCode):
 		return 403, api.Error{Code: "bad_code", Message: err.Error()}
+	case errors.Is(err, ErrNoUpdate):
+		return 409, api.Error{Code: "no_update", Message: err.Error()}
+	case errors.Is(err, ErrUpdating):
+		return 409, api.Error{Code: "updating", Message: err.Error()}
+	case errors.As(err, new(updateError)):
+		return 502, api.Error{Code: "update_failed", Message: err.Error()}
 	}
 	slog.Error("api: internal error", "err", err)
 	return 500, api.Error{Code: "internal", Message: "internal error"}
@@ -295,6 +308,7 @@ var tcpRoutes = map[string]access{
 	"PUT /v1/strategy":                 adminKey,
 	"PUT /v1/thresholds":               adminKey,
 	"POST /v1/refresh":                 adminKey,
+	"POST /v1/update":                  adminKey,
 	"POST /v1/web/session":             codeOnly,
 	"GET /v1/i18n/:lang":               noKey,
 }

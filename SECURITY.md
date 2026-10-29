@@ -68,9 +68,27 @@ it is visible in the process list for a moment. Claude Code writes its own item 
 
 ## Network
 
-ccswap talks to Anthropic only: `api.anthropic.com` (`/api/oauth/usage` and `/api/oauth/profile`) and
+ccswap talks to Anthropic: `api.anthropic.com` (`/api/oauth/usage` and `/api/oauth/profile`) and
 `platform.claude.com` (`/v1/oauth/token`, to refresh logins). It never sends prompts, proxies nothing and
-has no telemetry. With `ccswap remote set` it also asks the other ccswap you name for its limits.
+has no telemetry. With `ccswap remote set` it also asks the other ccswap you name for its limits. For
+updates it asks GitHub: `api.github.com` for the newest release (the daemon every 12 hours unless
+`[update] check = false`, and `ccswap update` and the page's Update button), and `github.com` for the
+release's files when one is installed. Nothing about you or your accounts goes with these requests.
+
+## Updates
+
+`ccswap update` and the page's Update button install the newest release of `Dudude-bit/ccswap` on
+GitHub, over HTTPS:
+
+- The archive for this platform must match its line in the same release's `checksums.txt`. That catches a
+  damaged or cut-off download, not a release that was itself tampered with: both files come from the same
+  place, and releases are not signed.
+- The binary in it is written next to the old one, must run there and report the release's version, and
+  only then replaces the old one in one rename. A failed update leaves the old binary and the running
+  daemon as they were.
+- Only a newer release is installed: never an older one, a draft or a prerelease.
+- The page's Update needs the admin key, a loopback listener and a loopback `Host`, like any other change.
+  The read key cannot start an update.
 
 ## The local API
 
@@ -82,7 +100,8 @@ has no telemetry. With `ccswap remote set` it also asks the other ccswap you nam
     emails, limits and status, and lets T3 Code ask for an account's usage; it never reveals a token.
     The page's texts (`GET /v1/i18n/<tag>`) need no key: they hold nothing secret.
   - The **admin key** changes settings: priorities, enabling and disabling accounts for auto-switch,
-    auto-switch itself, the strategy, thresholds, a manual switch and checking limits now. It is never
+    auto-switch itself, the strategy, thresholds, a manual switch, checking limits now and installing
+    an update. It is never
     printed and never put in a link. `ccswap web` asks the daemon over the socket for a one-time code
     (single use, valid for a minute) and opens the page with it; the page trades the code for the admin
     key and keeps it in the tab's `sessionStorage`.

@@ -3,6 +3,9 @@
 const RETRY_MS = 3000;
 const STALE_MS = 40000; // the daemon sends at least a ping every 15 s
 const TIMEOUT_MS = 60000;
+const UPDATE_MS = 150000; // the daemon gives an install two minutes
+const RESTART_MS = 90000; // how long the page waits for the daemon to come back on the new build
+const UPDATED_ITEM = 'ccswap-updated'; // the version this tab installed, to say so once the page reloads
 const KEY_ITEM = 'ccswap-key'; // the read key, typed in: the page only looks with it
 const ADMIN_ITEM = 'ccswap-admin-key'; // the admin key a ccswap web code was traded for: this tab only
 const HOUR = 3600000;
@@ -17,6 +20,7 @@ let timeFmt, dayFmt, dateFmt, numFmt;
 const state = {
   key: '', admin: false, autoBusy: false, strategyBusy: false, screen: '', loading: false, status: null, accounts: null,
   loadedAt: null, stream: null, retry: 0, watchdog: 0, hover: '', laneTab: '', fault: '', offline: false,
+  seen: '', updated: '', upd: { to: '', lost: false },
 };
 const rows = new Map();
 const lanes = new Map();
@@ -62,7 +66,7 @@ function takeCode() {
   return m ? decodeURIComponent(m[1]) : '';
 }
 
-async function api(method, path, body) {
+async function api(method, path, body, timeout = TIMEOUT_MS) {
   const headers = { Authorization: 'Bearer ' + state.key };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   let r;
@@ -70,7 +74,7 @@ async function api(method, path, body) {
     r = await fetch(path, {
       method, headers, cache: 'no-store',
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeout),
     });
   } catch (e) {
     throw new ApiError(e.name === 'TimeoutError' ? 'timeout' : 'offline');
@@ -88,11 +92,12 @@ const where = () => state.status?.host || t('host.any');
 // ERR_CODES are the error codes with a text of their own, e.<code>: the API's and the page's own offline
 // and timeout. Any other code reads e.other.
 const ERR_CODES = ['offline', 'timeout', 'unknown_active', 'internal', 'entry_expired', 'entry_changed', 'cannot_identify',
-  'invalid_thresholds', 'target_refreshing', 'not_found', 'needs_login', 'read_only', 'local_only', 'bad_code', 'migrating'];
+  'invalid_thresholds', 'target_refreshing', 'not_found', 'needs_login', 'read_only', 'local_only', 'bad_code', 'migrating',
+  'no_update', 'updating', 'update_failed'];
 
 const errArgs = (e, name) => ({
   cannot_identify: [e.message], invalid_thresholds: [e.message], target_refreshing: [name], not_found: [name],
-  needs_login: [name, where()], migrating: [name],
+  needs_login: [name, where()], migrating: [name], update_failed: [e.message],
 }[e.code] ?? [where()]);
 
 function describe(e, name = '<name>') {
@@ -340,6 +345,7 @@ function draw() {
   $('empty').hidden = any;
   renderTop(st);
   renderAlerts();
+  renderUpdate();
   if (any) {
     renderDuty();
     renderNext();
@@ -472,6 +478,79 @@ function renderAlerts() {
   if (shown === alertsShown) return;
   alertsShown = shown;
   $('alerts').replaceChildren(...specs.map(([n, key, args, tail, cmd]) => alertBox(n, tNodes(key, ...args), tail && t(tail), cmd)));
+}
+
+let updateShown = '';
+
+// renderUpdate says when a newer release is out: with Update on a page that may change settings, with the
+// command on one that only looks. While this tab's update restarts the daemon it says so, and once the daemon
+// is back on the new build the page reloads to get its own new version; another tab offers the reload. It
+// redraws only when that changes, so a focused button keeps its focus.
+function renderUpdate() {
+  const st = state.status, u = state.upd;
+  const spec = u.to ? [u.lost ? 'lost' : 'restarting', u.to]
+    : state.seen && st.version !== state.seen ? ['reload', st.version]
+    : state.updated && st.version === state.updated ? ['done', st.version]
+    : st.update ? [state.admin ? 'out' : 'outRo', st.update.version, st.update.url, st.version]
+    : null;
+  const shown = JSON.stringify([lang, spec]);
+  if (shown === updateShown) return;
+  updateShown = shown;
+  const el = $('update');
+  el.classList.remove('busy');
+  if (!spec) return hideMsg(el);
+  const [kind, version, url, running] = spec;
+  const button = (label, onClick) => {
+    const b = h('button', 'btn', h('span', 'spin'), h('span', 'label', label));
+    b.type = 'button';
+    b.addEventListener('click', onClick);
+    return b;
+  };
+  let kids;
+  if (kind === 'out' || kind === 'outRo') {
+    const notes = h('a', '', t('update.notes'));
+    Object.assign(notes, { href: url, target: '_blank', rel: 'noopener noreferrer' });
+    const text = h('span', 'grow', ...tNodes('update.out', version, where(), running));
+    if (kind === 'outRo') text.append(' ', ...tNodes('update.how'));
+    kids = [text, notes];
+    if (kind === 'out') {
+      const go = button(t('update.install'), installUpdate);
+      go.id = 'upd-go';
+      kids.splice(1, 0, go);
+    }
+  } else if (kind === 'reload') {
+    kids = [h('span', 'grow', ...tNodes('update.reload', version)), button(t('x.reload'), () => location.reload())];
+  } else if (kind === 'restarting') {
+    el.classList.add('busy');
+    kids = [h('span', 'spin'), h('span', 'grow', ...tNodes('update.restarting', version))];
+  } else {
+    kids = [h('span', 'grow', ...tNodes(kind === 'lost' ? 'update.lost' : 'update.done', version, where()))];
+  }
+  el.replaceChildren(...kids);
+  el.hidden = false;
+}
+
+// installUpdate has the daemon install the newest release. It answers once the new binary is in place and
+// then restarts on it: the page keeps quiet about the daemon being away for RESTART_MS, and onEvent reloads
+// it when the daemon is back.
+async function installUpdate() {
+  const b = $('upd-go');
+  setBusy(b, true, t('update.installing'));
+  hideMsg($('hero-err'));
+  try {
+    const r = await api('POST', '/v1/update', undefined, UPDATE_MS);
+    state.upd.to = r.version;
+    setTimeout(() => {
+      state.upd.lost = true;
+      if (state.status) render();
+    }, RESTART_MS);
+  } catch (e) {
+    if (e.code === 'unauthorized') return showAuth(true);
+    showMsg($('hero-err'), describe(e));
+  } finally {
+    setBusy(b, false, t('update.install'));
+  }
+  render();
 }
 
 function renderDuty() {
@@ -1037,7 +1116,8 @@ function loadDash() {
   $('live-text').replaceChildren(h('span', 'lseg m', t('boot.connecting', location.host)));
   $('banner').hidden = true;
   for (const id of ['alerts', 'hero-err']) $(id).replaceChildren();
-  alertsShown = '';
+  alertsShown = updateShown = '';
+  hideMsg($('update'));
   $('hero-err').hidden = true;
   fault('');
   reveal('dash');
@@ -1047,7 +1127,7 @@ function loadDash() {
 // it as of its time and puts the controls that ask the daemon to sleep (draw, asleep).
 function setOffline(e) {
   const b = $('banner'), was = state.offline;
-  b.hidden = !e;
+  b.hidden = !e || Boolean(state.upd.to && !state.upd.lost); // the update strip says the daemon is restarting
   state.offline = Boolean(e && state.status);
   if (e) {
     const nodes = [...describeNodes(e), ' ', state.loadedAt ? t('offline.from', clock(state.loadedAt)) : t('offline.retry')];
@@ -1061,7 +1141,7 @@ function setOffline(e) {
 // asleep disables the controls that ask the daemon while it cannot be reached, saying why in their title, and
 // wakes them once it is back.
 function asleep(off) {
-  for (const el of document.querySelectorAll('#auto, #strategy, #refresh, #accounts .use, #accounts .step, #accounts .enabled, #accounts .stepper input')) {
+  for (const el of document.querySelectorAll('#auto, #strategy, #refresh, #upd-go, #accounts .use, #accounts .step, #accounts .enabled, #accounts .stepper input')) {
     if (off) {
       el.classList.add('asleep');
       el.disabled = true;
@@ -1141,6 +1221,12 @@ function onEvent(block) {
     return;
   }
   if (state.fault === 'read') fault('');
+  if (state.upd.to && snap.status.version !== state.seen) { // back on the new build: its page may differ too
+    try { sessionStorage.setItem(UPDATED_ITEM, snap.status.version); } catch { /* storage off: no word after the reload */ }
+    location.reload();
+    return;
+  }
+  state.seen ||= snap.status.version;
   state.status = snap.status;
   state.accounts = snap.accounts;
   state.loadedAt = new Date();
@@ -1495,6 +1581,16 @@ async function init() {
   }
   admin ||= adminKey();
   state.admin = Boolean(admin);
+  try {
+    state.updated = sessionStorage.getItem(UPDATED_ITEM) || '';
+    sessionStorage.removeItem(UPDATED_ITEM);
+  } catch { /* storage off */ }
+  if (state.updated) {
+    setTimeout(() => {
+      state.updated = '';
+      if (state.status) render();
+    }, 15000);
+  }
   state.key = admin || storedKey();
 
   $('auth-form').addEventListener('submit', logIn);

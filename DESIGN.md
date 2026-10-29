@@ -385,6 +385,7 @@ The legend above the rota draws these in ink (needs login in muted ink, disabled
 ### Strips and alerts
 - **Alert strip:** full width, the inverted alert palette, 4px radius, min 44px. Shown only when the user must act (daemon unreachable, all exhausted, a login ccswap does not know, needs login), gravest first. Buttons inside are outlined in alert-edge; focus rings switch to alert text.
 - **Message strip:** surface ground with a 1px border; critical (red border and text) for errors, warn (edge border, ink text) for advisories; the fault variant carries a Reload button and a report link.
+- **Update strip:** the warn message strip, laid out like the fault one, below the error strips. It shows only when a newer release is out: the sentence (version in 600), then Update as a default button and a "What's new" link pushed right; a view-only page puts the command in the sentence instead of the button. While this tab's update restarts the daemon it carries a spinner and says so, and the offline alert holds back for 90 seconds; the page then reloads and says it is updated for 15 seconds. Another open tab offers Reload. An update never takes the alert strip: nothing is wrong until the user chooses it.
 - **Note:** 13px muted line for the read-only notice and host notes.
 
 ### Read-only and offline

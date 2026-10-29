@@ -45,8 +45,9 @@ type fake struct {
 	remote   api.RemoteRequest
 	payload  map[string]any
 	codes    int
-	listen   *string // Status.Listen
-	version  string  // Status.Version
+	listen   *string      // Status.Listen
+	version  string       // Status.Version
+	update   *api.Release // Status.Update
 	err      error
 	delay    time.Duration // Status and Activate answer this late
 
@@ -79,7 +80,7 @@ func (f *fake) migrateCalls() string {
 func (f *fake) Status(context.Context) (api.Status, error) {
 	time.Sleep(f.delay)
 	return api.Status{Active: "work", Auto: true, Strategy: api.CacheAware, TargetService: "Claude Code-credentials",
-		Thresholds: api.Thresholds{FiveHour: 95, SevenDay: 98}, UnknownActive: true, Listen: f.listen, Version: f.version}, f.err
+		Thresholds: api.Thresholds{FiveHour: 95, SevenDay: 98}, UnknownActive: true, Listen: f.listen, Version: f.version, Update: f.update}, f.err
 }
 func (f *fake) Accounts(context.Context) ([]api.Account, error) { return f.accounts, f.err }
 func (f *fake) Import(_ context.Context, r api.ImportRequest) (api.Account, error) {
@@ -129,6 +130,9 @@ func (f *fake) WebCode(context.Context) (api.WebCode, error) {
 }
 func (f *fake) UseWebCode(context.Context, string) error { return f.err }
 func (f *fake) Version() string                          { return "test" }
+func (f *fake) InstallUpdate(context.Context) (api.Release, error) {
+	return api.Release{}, f.err
+}
 func (f *fake) MigrateExport(context.Context, []string) (api.MigrateExport, error) {
 	f.call("export")
 	if f.blockExport != nil {
