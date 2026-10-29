@@ -1331,7 +1331,15 @@ async function refreshToken(r) {
   render();
 }
 
-const relog = { name: '', from: null, run: 0, stage: '', url: '', expires: null, timer: 0, checking: false, done: false };
+const relog = { name: '', from: null, run: 0, stage: '', url: '', expires: null, timer: 0, checking: false, done: false, queue: Promise.resolve() };
+
+// loginCall sends login requests one at a time: the daemon cancels by account, so a close's DELETE must not
+// overtake the POST before it or land after the next link's.
+function loginCall(method, name, tail, body) {
+  const p = relog.queue.then(() => api(method, `/v1/accounts/${encodeURIComponent(name)}/login${tail}`, body));
+  relog.queue = p.catch(() => {});
+  return p;
+}
 
 // openRelog logs name in again from the page: the daemon runs claude auth login and hands its sign-in link
 // here; the code the sign-in shows comes back through the form. from gets the focus back on close.
@@ -1382,7 +1390,7 @@ async function getLink() {
   $('relog-code').value = '';
   relogStage('wait');
   try {
-    const l = await api('POST', `/v1/accounts/${encodeURIComponent(name)}/login`);
+    const l = await loginCall('POST', name, '');
     if (n !== relog.run) return;
     relog.url = l.url;
     relog.expires = new Date(l.expires_at);
@@ -1417,7 +1425,7 @@ async function finishRelog(ev) {
   setBusy(submit, true, t('relog.checking'));
   input.readOnly = true;
   try {
-    patchLocal(name, await api('POST', `/v1/accounts/${encodeURIComponent(name)}/login/code`, { code }));
+    patchLocal(name, await loginCall('POST', name, '/code', { code }));
     render();
     if (n === relog.run) {
       relog.done = true;
@@ -1446,7 +1454,7 @@ function closeRelog() {
   if (!d.open) return;
   relog.run++;
   clearTimeout(relog.timer);
-  if (!relog.done) api('DELETE', `/v1/accounts/${encodeURIComponent(relog.name)}/login`).catch(() => {});
+  if (!relog.done) loginCall('DELETE', relog.name, '').catch(() => {});
   d.close();
   const r = rows.get(relog.name);
   [relog.from, r?.relog, r?.tok, r?.use].find((el) => el?.isConnected && !el.hidden && el.offsetParent)?.focus();
