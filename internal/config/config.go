@@ -49,14 +49,17 @@ type Update struct{ Check bool }
 type Web struct{ AdminURL string }
 
 // MatchesHost reports whether a request's Host names AdminURL, the scheme's default port optional on
-// either side.
+// either side. AdminURL is a checked origin, so it splits without parsing on every request.
 func (w Web) MatchesHost(host string) bool {
-	u, err := url.Parse(w.AdminURL)
-	if err != nil || u.Host == "" {
+	scheme, h, ok := strings.Cut(w.AdminURL, "://")
+	if !ok || h == "" {
 		return false
 	}
-	port := map[string]string{"https": ":443", "http": ":80"}[u.Scheme]
-	return strings.EqualFold(strings.TrimSuffix(host, port), strings.TrimSuffix(u.Host, port))
+	port := ":443"
+	if strings.EqualFold(scheme, "http") {
+		port = ":80"
+	}
+	return strings.EqualFold(strings.TrimSuffix(host, port), strings.TrimSuffix(h, port))
 }
 
 type Config struct {
@@ -246,7 +249,7 @@ func CheckAdminURL(raw string) error {
 	if err := CheckRemote(raw); err != nil {
 		return err
 	}
-	if u, _ := url.Parse(raw); !strings.EqualFold(strings.TrimRight(raw, "/"), u.Scheme+"://"+u.Host) {
+	if u, _ := url.Parse(raw); !strings.EqualFold(strings.TrimRight(raw, "/"), u.Scheme+"://"+u.Host) || strings.HasSuffix(u.Host, ":") {
 		return i18n.Err("config.admin_url_not_origin")
 	}
 	return nil

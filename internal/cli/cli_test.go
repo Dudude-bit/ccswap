@@ -302,8 +302,12 @@ func TestListTable(t *testing.T) {
 	if len(lines) != 6 || !strings.Contains(lines[0], header[len(header)-1]) || lines[5] != i18n.N("list.accounts", 4) {
 		t.Fatalf("table:\n%s", out)
 	}
-	if !strings.Contains(lines[4], i18n.T("list.no_limit")) || strings.Contains(lines[2], i18n.T("list.no_limit")+" ") {
-		t.Fatalf("no 5-hour limit reads apart from no data yet:\n%s", out)
+	// a row's 5h cell: tabwriter aligns runes, and ▶ is one rune of three bytes
+	col := func(name string) int { return len([]rune(lines[0][:strings.Index(lines[0], name)])) }
+	from, to := col(header[4]), col(header[5])
+	five := func(l string) string { r := []rune(l); return strings.TrimSpace(string(r[from:min(to, len(r))])) }
+	if five(lines[4]) != i18n.T("list.no_limit") || five(lines[2]) != "-" {
+		t.Fatalf("no 5-hour limit reads apart from no data yet: %q %q\n%s", five(lines[4]), five(lines[2]), out)
 	}
 	if !strings.HasPrefix(lines[1], "▶") || !strings.Contains(lines[1], "42%") || !strings.Contains(lines[1], "7%") ||
 		!strings.Contains(lines[1], reset.Local().Format("15:04")) {
@@ -584,8 +588,12 @@ func TestWeb(t *testing.T) {
 func TestWebAtAdminURL(t *testing.T) {
 	english(t)
 	admin := "https://ccswap.example.com"
-	for _, listen := range []string{"127.0.0.1:8318", "0.0.0.0:8318"} {
-		f := &fake{listen: &listen, adminURL: &admin, version: "test"}
+	remote := admin + "/management.html#code=c0de"
+	for _, tc := range []struct{ listen, open string }{
+		{"0.0.0.0:8318", remote},
+		{"127.0.0.1:8318", "http://127.0.0.1:8318/management.html#code=c0de"}, // this machine keeps its own link
+	} {
+		f := &fake{listen: &tc.listen, adminURL: &admin, version: "test"}
 		env(t, f)
 		old := openURL
 		var opened []string
@@ -593,10 +601,13 @@ func TestWebAtAdminURL(t *testing.T) {
 		t.Cleanup(func() { openURL = old })
 		setGOOS(t, "linux")
 		out, err := run(t, "", "web")
-		want := admin + "/management.html#code=c0de"
-		if err != nil || f.codes != 1 || len(opened) != 1 || opened[0] != want || !strings.HasPrefix(out, want+"\n") ||
-			!strings.Contains(out, "works once") || strings.Contains(out, "ssh -L") || strings.Contains(out, "127.0.0.1") {
-			t.Fatalf("%s: %v %d %q %s", listen, err, f.codes, opened, out)
+		codes := 1
+		if tc.open != remote {
+			codes = 2
+		}
+		if err != nil || f.codes != codes || len(opened) != 1 || opened[0] != tc.open || !strings.HasPrefix(out, tc.open+"\n") ||
+			!strings.Contains(out, "works once") || !strings.Contains(out, remote) || strings.Contains(out, "ssh -L") {
+			t.Fatalf("%s: %v %d %q %s", tc.listen, err, f.codes, opened, out)
 		}
 	}
 }

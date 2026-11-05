@@ -749,6 +749,31 @@ func TestChangesNeedALoopbackHost(t *testing.T) { // DNS rebinding: a foreign na
 	}
 }
 
+type adminURLCore struct{ *fakeCore }
+
+func (c adminURLCore) Status(ctx context.Context) (api.Status, error) {
+	st, err := c.fakeCore.Status(ctx)
+	u := "https://ccswap.example.com"
+	st.AdminUrl = &u
+	return st, err
+}
+
+func TestAdminURLStaysOnTheSocket(t *testing.T) { // where changes are taken is not for every key holder
+	app := newHTTPApp(adminURLCore{&fakeCore{}}, fakeHub{}, keys)
+	for _, key := range []string{keys.read, keys.admin} {
+		var st api.Status
+		if r := httpDo(t, app, "GET", "/v1/status", key, ""); json.NewDecoder(r.Body).Decode(&st) != nil || r.StatusCode != 200 || st.AdminUrl != nil {
+			t.Fatalf("status over TCP: %d %v", r.StatusCode, st.AdminUrl)
+		}
+	}
+	if b, err := snap(tcpCore{adminURLCore{&fakeCore{}}}); err != nil || strings.Contains(string(b), "admin_url") {
+		t.Fatalf("events over TCP: %s %v", b, err)
+	}
+	if st, _ := (strict{adminURLCore{&fakeCore{}}}).c.Status(context.Background()); st.AdminUrl == nil {
+		t.Fatal("the socket lost it")
+	}
+}
+
 func TestAdminURLTakesChanges(t *testing.T) {
 	const host = "ccswap.example.com"
 	for _, local := range []bool{true, false} {

@@ -275,8 +275,8 @@ does not know, add it with `ccswap adopt <name>` first.
 **When it moves.** The account in use is left when it reaches a threshold:
 
 - 95% of its 5-hour window (`five_hour`), on a plan that has one: Anthropic's answer has no such window
-  for a verified Ultra, so only the weekly limits count, and the page, `ccswap tui` and `ccswap list` show
-  "no limit" there,
+  for a verified Ultra, so only the weekly limits count, the page and `ccswap tui` show "no limit" there,
+  and `ccswap list` "none" in its 5H column,
 - 98% of its weekly window, or of a per-model weekly window such as Sonnet's (`weekly`),
 - or when a session stops on a usage limit: the hook reports it, and the account counts as at its limit
   for an hour, or until the window the message names resets if that comes sooner (for a message that names
@@ -408,7 +408,8 @@ admin_url = "https://ccswap.example.com"
 ```
 
 `ccswap web` then prints a link to that address, so run it on the computer running ccswap and open the link
-within the minute. The page there takes every change it takes on loopback; under any other name it still
+within the minute; with a loopback listener it prints the loopback link first and opens that one, as that
+computer needs no detour. The page there takes every change it takes on loopback; under any other name it still
 only looks, and the read key only looks everywhere. The address must be https, or plain http to a
 loopback, private or CGNAT address, with nothing after the host. It is off by default; SECURITY.md says
 what it opens.

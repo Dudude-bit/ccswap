@@ -54,23 +54,36 @@ func newWebCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			link, adminURL := links[0], st.JSON200.AdminUrl
-			if adminURL != nil {
+			if !local && adminURL != nil {
 				link = *adminURL + web.Page
 			}
 			if local || adminURL != nil {
-				r, err := cl.CreateWebCodeWithResponse(ctx)
-				if err != nil {
-					return down(err)
+				code := func() (string, error) {
+					r, err := cl.CreateWebCodeWithResponse(ctx)
+					if err != nil {
+						return "", down(err)
+					}
+					if err := apiErr(r.StatusCode(), r.Body, "", 200); err != nil {
+						return "", err
+					}
+					if r.JSON200 == nil {
+						return "", errBadResp
+					}
+					return r.JSON200.Code, nil
 				}
-				if err := apiErr(r.StatusCode(), r.Body, "", 200); err != nil {
+				c, err := code()
+				if err != nil {
 					return err
 				}
-				if r.JSON200 == nil {
-					return errBadResp
-				}
-				link += "#code=" + r.JSON200.Code
+				link += "#code=" + c
 				fmt.Fprintln(out, link)
 				fmt.Fprintln(out, i18n.T("page.link_once"))
+				if local && adminURL != nil { // this machine keeps its loopback link; other computers get admin_url's, with a code of its own
+					if c, err = code(); err != nil {
+						return err
+					}
+					fmt.Fprintf(out, i18n.T("page.admin_url_link"), *adminURL+web.Page+"#code="+c)
+				}
 				if adminURL == nil && claudecode.GOOS != "darwin" {
 					_, port, _ := net.SplitHostPort(listen)
 					fmt.Fprintf(out, i18n.T("page.ssh_tunnel_hint"), port, listen)

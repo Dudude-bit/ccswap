@@ -234,6 +234,7 @@ func TestWebAdminURL(t *testing.T) {
 		"https://ccswap.example.com/%2F",
 		"https://ccswap.example.com/?",
 		"https://ccswap.example.com/#",
+		"https://ccswap.example.com:", // an empty port no Host would ever name
 		"ccswap.example.com",
 	} {
 		if _, err := Load(write(t, "[web]\nadmin_url = \""+raw+"\"\n")); err == nil {

@@ -268,7 +268,8 @@ web page, part of the API and the T3 Code hub:
 Everything else, such as adding and removing accounts, a forced switch, the hook signal, `remote`,
 `migrate`, the language, the web codes and the restart `ccswap update` asks for, is served on the socket
 only. The `Host` check stops a site whose name was pointed at 127.0.0.1 (DNS rebinding) from changing
-anything; `[web] admin_url` names the one other `Host` to trust, and `ccswap web` links to it.
+anything; `[web] admin_url` names the one other `Host` to trust, and `ccswap web` links to it (after the
+loopback link, when the listener is on loopback). Only the socket's status names that address.
 
 **A login from the page** renews an account that is already here. `POST /v1/accounts/{name}/login`
 makes a `login-*` folder, runs `claude auth login` in it as `ccswap login` does (`CCSWAP_CLAUDE_BIN`,

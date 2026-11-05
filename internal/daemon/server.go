@@ -458,6 +458,16 @@ func (r tcpRouter) Delete(p string, h any, hs ...any) fiber.Router {
 // adminCaller marks the context of a TCP request with the admin key.
 type adminCaller struct{}
 
+// tcpCore is the Core as the TCP listener shows it: admin_url, where changes are taken, is for `ccswap web`
+// on the socket, not for every holder of a key, so its status and events leave it out.
+type tcpCore struct{ Core }
+
+func (c tcpCore) Status(ctx context.Context) (api.Status, error) {
+	st, err := c.Core.Status(ctx)
+	st.AdminUrl = nil
+	return st, err
+}
+
 // tcpStrict is the API as the TCP listener serves it: a switch is never forced there, as forcing
 // one may undo the token refresh Claude Code is about to make; admin is the listener's admin key.
 type tcpStrict struct {
@@ -493,7 +503,7 @@ func newHTTPApp(core Core, hub t3.Source, k httpKeys) *fiber.App {
 	app := fiber.New(fiber.Config{ErrorHandler: errorJSON, ReadTimeout: 10 * time.Second, IdleTimeout: time.Minute})
 	web.Register(app)
 	r := tcpRouter{app, k, map[string]bool{}}
-	api.RegisterHandlers(r, api.NewStrictHandler(tcpStrict{strict{core}, k.admin}, nil))
+	api.RegisterHandlers(r, api.NewStrictHandler(tcpStrict{strict{tcpCore{core}}, k.admin}, nil))
 	if len(r.seen) != len(tcpRoutes) {
 		panic("tcpRoutes names a route the API does not have")
 	}

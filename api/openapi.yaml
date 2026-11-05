@@ -444,7 +444,7 @@ components:
           description: Who held Claude Code over the last 24 hours, oldest first; the current holder's shift has no end, and time it held no known account has no shift
           items: {$ref: "#/components/schemas/Shift"}
         listen: {type: string, description: "The address the TCP listener (T3 Code, the web page) is bound to, such as 127.0.0.1:8318; absent while it is off"}
-        admin_url: {type: string, description: "[web] admin_url: the address where the page takes changes besides loopback, and where ccswap web sends you; absent when unset or while the listener is off"}
+        admin_url: {type: string, description: "[web] admin_url: the address where the page takes changes besides loopback, and where ccswap web sends you; absent when unset, while the listener is off, and on the TCP listener, where it is no key holder's business"}
         thresholds: {$ref: "#/components/schemas/Thresholds"}
         update: {$ref: "#/components/schemas/Release"}
         warning: {type: string, description: Non-fatal warning of the last operation}

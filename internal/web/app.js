@@ -616,7 +616,7 @@ function gauge(el, { label, w, limit, none }) {
     el.querySelector('.n').textContent = none ? t('m.noLimit') : '—';
     el.style.setProperty('--u', '0%');
     bar.removeAttribute('aria-valuenow');
-    bar.setAttribute('aria-label', t('m.noDataLabel', label));
+    bar.setAttribute('aria-label', t(none ? 'm.noLimitLabel' : 'm.noDataLabel', label));
     el.querySelector('.g-reset').textContent = none ? '' : t('m.noData');
     return;
   }
