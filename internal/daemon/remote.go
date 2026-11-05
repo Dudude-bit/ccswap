@@ -114,7 +114,7 @@ func (d *Daemon) takeRemote(name string, ra api.Account, maxAge time.Duration) b
 		}
 		return r
 	}
-	us := anthropic.Usage{FiveHour: win(ra.FiveHour), SevenDay: win(ra.SevenDay)}
+	us := anthropic.Usage{FiveHour: win(ra.FiveHour), NoFiveHour: ra.NoFiveHourLimit, SevenDay: win(ra.SevenDay)}
 	for _, m := range ra.Models {
 		us.Models = append(us.Models, anthropic.ModelWindow{Name: m.Name, Window: *win(&api.Window{Utilization: m.Utilization, ResetsAt: m.ResetsAt})})
 	}
@@ -124,7 +124,7 @@ func (d *Daemon) takeRemote(name string, ra api.Account, maxAge time.Duration) b
 	if u.checkedAt.After(at) { // asked here since: keep the newer numbers
 		return true
 	}
-	u.fiveHour, u.sevenDay, u.models, u.checkedAt, u.err = us.FiveHour, us.SevenDay, us.Models, at, ""
+	u.fiveHour, u.noFiveHour, u.sevenDay, u.models, u.checkedAt, u.err = us.FiveHour, us.NoFiveHour, us.SevenDay, us.Models, at, ""
 	if ra.Error != nil {
 		u.err = *ra.Error
 	}

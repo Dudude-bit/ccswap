@@ -190,21 +190,38 @@ func TestRemote(t *testing.T) {
 }
 
 func TestWebAdminURL(t *testing.T) {
-	if c, err := Load(write(t, "")); err != nil || c.Web.AdminURL != "" || c.Web.AdminHost() != "" {
+	if c, err := Load(write(t, "")); err != nil || c.Web.AdminURL != "" || c.Web.MatchesHost("") {
 		t.Fatal("changes off loopback must stay off by default:", c.Web, err)
 	}
-	for raw, host := range map[string]string{
-		"https://ccswap.example.com":      "ccswap.example.com",
-		"https://ccswap.example.com/":     "ccswap.example.com",
-		"https://ccswap.example.com:443":  "ccswap.example.com",
-		"https://ccswap.example.com:8443": "ccswap.example.com:8443",
-		"http://100.100.1.2:8318":         "100.100.1.2:8318",
-		"http://100.100.1.2:80":           "100.100.1.2",
-		"http://[::1]:80":                 "[::1]",
+	for raw, hosts := range map[string][]string{
+		"https://ccswap.example.com":      {"ccswap.example.com", "ccswap.example.com:443", "CCSWAP.example.com"},
+		"https://ccswap.example.com/":     {"ccswap.example.com", "ccswap.example.com:443"},
+		"https://ccswap.example.com:443":  {"ccswap.example.com", "ccswap.example.com:443"},
+		"https://ccswap.example.com:8443": {"ccswap.example.com:8443"},
+		"http://100.100.1.2:8318":         {"100.100.1.2:8318"},
+		"http://100.100.1.2:80":           {"100.100.1.2", "100.100.1.2:80"},
+		"http://[::1]:80":                 {"[::1]", "[::1]:80"},
 	} {
 		c, err := Load(write(t, "[web]\nadmin_url = \""+raw+"\"\n"))
-		if err != nil || c.Web.AdminHost() != host || strings.HasSuffix(c.Web.AdminURL, "/") {
-			t.Errorf("%s: %q %q %v", raw, c.Web.AdminURL, c.Web.AdminHost(), err)
+		if err != nil || strings.HasSuffix(c.Web.AdminURL, "/") {
+			t.Errorf("%s: %q %v", raw, c.Web.AdminURL, err)
+		}
+		for _, host := range hosts {
+			if !c.Web.MatchesHost(host) {
+				t.Errorf("%s must match %s", raw, host)
+			}
+		}
+	}
+	for host, raw := range map[string]string{
+		"":                        "https://ccswap.example.com",
+		"evil.example.com":        "https://ccswap.example.com",
+		"ccswap.example.com:80":   "https://ccswap.example.com",
+		"ccswap.example.com:8443": "https://ccswap.example.com",
+		"ccswap.example.com":      "https://ccswap.example.com:8443",
+		"100.100.1.2:443":         "http://100.100.1.2:80",
+	} {
+		if (Web{raw}).MatchesHost(host) {
+			t.Errorf("%s must not match %q", raw, host)
 		}
 	}
 	for _, raw := range []string{
@@ -214,6 +231,9 @@ func TestWebAdminURL(t *testing.T) {
 		"https://ccswap.example.com/ccswap",
 		"https://ccswap.example.com/?a=1",
 		"https://ccswap.example.com/#a",
+		"https://ccswap.example.com/%2F",
+		"https://ccswap.example.com/?",
+		"https://ccswap.example.com/#",
 		"ccswap.example.com",
 	} {
 		if _, err := Load(write(t, "[web]\nadmin_url = \""+raw+"\"\n")); err == nil {

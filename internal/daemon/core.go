@@ -96,6 +96,7 @@ type Options struct {
 // acctUsage is the daemon's memory of one account's limits.
 type acctUsage struct {
 	fiveHour, sevenDay *anthropic.Window
+	noFiveHour         bool
 	models             []anthropic.ModelWindow
 	checkedAt          time.Time
 	err                string
@@ -271,9 +272,9 @@ func (d *Daemon) startHTTP(ctx context.Context, cancel context.CancelFunc) func(
 		slog.Error("http: cannot listen, listener off", "addr", d.o.Config.T3.Listen, "err", err)
 		return func() {}
 	}
-	k := httpKeys{read: read, admin: admin, local: ln.Addr().(*net.TCPAddr).IP.IsLoopback(), adminHost: d.o.Config.Web.AdminHost()}
+	k := httpKeys{read: read, admin: admin, local: ln.Addr().(*net.TCPAddr).IP.IsLoopback(), web: d.o.Config.Web}
 	switch {
-	case k.adminHost != "":
+	case k.web.AdminURL != "":
 		slog.Info("http: the page takes changes at [web] admin_url", "url", d.o.Config.Web.AdminURL)
 	case !k.local:
 		slog.Info("http: not on a loopback address, so the page and T3 Code only read", "addr", ln.Addr())
@@ -1067,7 +1068,7 @@ func (d *Daemon) fetch(ctx context.Context, name, tok string) (anthropic.UsageRe
 	case res.Status/100 != 2:
 		u.err = i18n.T("daemon.anthropic_answered", res.Status)
 	default:
-		u.fiveHour, u.sevenDay, u.models = res.Usage.FiveHour, res.Usage.SevenDay, res.Usage.Models
+		u.fiveHour, u.noFiveHour, u.sevenDay, u.models = res.Usage.FiveHour, res.Usage.NoFiveHour, res.Usage.SevenDay, res.Usage.Models
 		u.checkedAt, u.err = now, ""
 		u.sample()
 		if u.calm++; u.calm >= calmAnswers && u.every > 0 { // probe whether the endpoint eased up
@@ -1487,7 +1488,7 @@ func (d *Daemon) view(st store.State, a store.Account) api.Account {
 	d.mu.Unlock()
 	v := api.Account{Name: a.Name, Email: a.Email, Priority: a.Priority, Enabled: a.Enabled, NeedsLogin: a.NeedsLogin,
 		Active: active, Models: []api.ModelWindow{}, CheckedAt: timePtr(u.checkedAt), LeavesAt: timePtr(leaves),
-		FiveHour: window(u.fiveHour), SevenDay: window(u.sevenDay), NoFiveHourLimit: u.fiveHour == nil && u.sevenDay != nil}
+		FiveHour: window(u.fiveHour), SevenDay: window(u.sevenDay), NoFiveHourLimit: u.noFiveHour && u.sevenDay != nil}
 	s, now := stateOf(a, &u), d.o.Now()
 	if r := policy.ExhaustedBy(s, d.th(), now); r != "" {
 		v.Exhausted, v.ExhaustedReason, v.LeavesAt = true, &r, nil // leaving already

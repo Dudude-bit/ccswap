@@ -527,7 +527,7 @@ components:
         leaves_at: {type: string, format: date-time, description: "Account in use only: when it reaches the five-hour, weekly or a per-model weekly threshold at its pace in use over the last hour, whichever comes first; absent when the pace is unknown or flat, or the window resets first"}
         five_hour: {$ref: "#/components/schemas/Window"}
         seven_day: {$ref: "#/components/schemas/Window"}
-        no_five_hour_limit: {type: boolean, description: "Anthropic's last answer has a weekly window and no five-hour one: this plan has no such limit, as a verified Ultra has none. False before the first answer, when five_hour is just unknown"}
+        no_five_hour_limit: {type: boolean, description: "Anthropic's last answer has a weekly window and a null five-hour one: this plan has no such limit, as a verified Ultra has none. False before the first answer, or with a five_hour missing or unreadable, which say nothing of the plan"}
         models:
           type: array
           items: {$ref: "#/components/schemas/ModelWindow"}

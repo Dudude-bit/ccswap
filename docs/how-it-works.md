@@ -168,7 +168,8 @@ The daemon asks `GET https://api.anthropic.com/api/oauth/usage` with the account
 header `anthropic-beta: oauth-2025-04-20` (package `anthropic`). It reads `five_hour`, `seven_day`,
 `seven_day_opus`, `seven_day_sonnet`, and the `limits` entries of kind `weekly_scoped` that name a model.
 An answer with a `seven_day` and a null `five_hour` means the plan has no 5-hour limit, as a verified Ultra
-has none (`no_five_hour_limit` in the API): a window that has not started is still a window, at 0.
+has none (`no_five_hour_limit` in the API): a window that has not started is still a window, at 0, and a
+missing or unreadable `five_hour` says nothing of the plan.
 Requests time out after 15 seconds, and at most four accounts are asked at once. Every request carries
 the user agent `ccswap/<version>`.
 

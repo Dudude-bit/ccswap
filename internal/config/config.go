@@ -48,13 +48,15 @@ type Update struct{ Check bool }
 // changes to loopback.
 type Web struct{ AdminURL string }
 
-// AdminHost is the Host a browser sends to AdminURL, which never carries the scheme's default port.
-func (w Web) AdminHost() string {
+// MatchesHost reports whether a request's Host names AdminURL, the scheme's default port optional on
+// either side.
+func (w Web) MatchesHost(host string) bool {
 	u, err := url.Parse(w.AdminURL)
-	if err != nil {
-		return ""
+	if err != nil || u.Host == "" {
+		return false
 	}
-	return strings.TrimSuffix(u.Host, map[string]string{"https": ":443", "http": ":80"}[u.Scheme])
+	port := map[string]string{"https": ":443", "http": ":80"}[u.Scheme]
+	return strings.EqualFold(strings.TrimSuffix(host, port), strings.TrimSuffix(u.Host, port))
 }
 
 type Config struct {
@@ -244,7 +246,7 @@ func CheckAdminURL(raw string) error {
 	if err := CheckRemote(raw); err != nil {
 		return err
 	}
-	if u, _ := url.Parse(raw); strings.Trim(u.Path, "/") != "" || u.RawQuery != "" || u.Fragment != "" {
+	if u, _ := url.Parse(raw); !strings.EqualFold(strings.TrimRight(raw, "/"), u.Scheme+"://"+u.Host) {
 		return i18n.Err("config.admin_url_not_origin")
 	}
 	return nil

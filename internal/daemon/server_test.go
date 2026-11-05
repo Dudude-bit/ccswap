@@ -21,6 +21,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 
 	"github.com/Dudude-bit/ccswap/internal/api"
+	"github.com/Dudude-bit/ccswap/internal/config"
 	"github.com/Dudude-bit/ccswap/internal/i18n"
 	"github.com/Dudude-bit/ccswap/internal/migrate"
 	"github.com/Dudude-bit/ccswap/internal/store"
@@ -753,7 +754,7 @@ func TestAdminURLTakesChanges(t *testing.T) {
 	for _, local := range []bool{true, false} {
 		f := &fakeCore{}
 		k := keys
-		k.local, k.adminHost = local, host
+		k.local, k.web = local, config.Web{AdminURL: "https://" + host}
 		app := newHTTPApp(f, fakeHub{}, k)
 		for _, c := range adminRoutes {
 			if r := httpDoHost(t, app, host, c.method, c.path, k.admin, c.body); r.StatusCode/100 != 2 {
@@ -771,6 +772,12 @@ func TestAdminURLTakesChanges(t *testing.T) {
 		}
 		if r := httpDoHost(t, app, "CCSWAP.example.com", "POST", "/v1/refresh", k.admin, ""); r.StatusCode != 204 {
 			t.Errorf("a Host differs only in case: %d", r.StatusCode)
+		}
+		if r := httpDoHost(t, app, host+":443", "POST", "/v1/refresh", k.admin, ""); r.StatusCode != 204 {
+			t.Errorf("a Host spells out the default port: %d", r.StatusCode)
+		}
+		if r := httpDoHost(t, app, host+":8443", "POST", "/v1/refresh", k.admin, ""); r.StatusCode != 403 || errCode(t, r) != "local_only" {
+			t.Errorf("a Host names another port: %d", r.StatusCode)
 		}
 		r := httpDoHost(t, app, host, "POST", "/v1/web/session", "", `{"code":"c0de"}`)
 		var s api.WebSession

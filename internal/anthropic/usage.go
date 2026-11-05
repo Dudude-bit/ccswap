@@ -21,6 +21,7 @@ type ModelWindow struct {
 
 type Usage struct {
 	FiveHour, SevenDay *Window
+	NoFiveHour         bool // five_hour is null, not just missing or unreadable
 	Models             []ModelWindow
 }
 
@@ -63,7 +64,7 @@ func ParseUsage(b []byte) (Usage, error) {
 	if err := json.Unmarshal(b, &top); err != nil {
 		return Usage{}, fmt.Errorf("usage: bad response: %w", err)
 	}
-	u := Usage{FiveHour: window(top["five_hour"]), SevenDay: window(top["seven_day"])}
+	u := Usage{FiveHour: window(top["five_hour"]), NoFiveHour: string(top["five_hour"]) == "null", SevenDay: window(top["seven_day"])}
 	for _, m := range []struct{ name, key string }{{"opus", "seven_day_opus"}, {"sonnet", "seven_day_sonnet"}} {
 		if w := window(top[m.key]); w != nil {
 			u.Models = append(u.Models, ModelWindow{m.name, *w})
@@ -145,6 +146,8 @@ func Body(u Usage) []byte {
 	top := map[string]any{}
 	if u.FiveHour != nil {
 		top["five_hour"] = win(*u.FiveHour)
+	} else if u.NoFiveHour {
+		top["five_hour"] = nil
 	}
 	if u.SevenDay != nil {
 		top["seven_day"] = win(*u.SevenDay)

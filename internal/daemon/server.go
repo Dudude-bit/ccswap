@@ -17,6 +17,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 
 	"github.com/Dudude-bit/ccswap/internal/api"
+	"github.com/Dudude-bit/ccswap/internal/config"
 	"github.com/Dudude-bit/ccswap/internal/i18n"
 	"github.com/Dudude-bit/ccswap/internal/migrate"
 	"github.com/Dudude-bit/ccswap/internal/store"
@@ -372,18 +373,18 @@ var tcpRoutes = map[string]access{
 	"GET /v1/i18n/:lang":                 noKey,
 }
 
-// httpKeys are the TCP listener's keys; local: it listens on a loopback address; adminHost: the Host
-// of [web] admin_url, "" when unset.
+// httpKeys are the TCP listener's keys; local: it listens on a loopback address; web: names the other
+// address that takes changes.
 type httpKeys struct {
 	read, admin string
 	local       bool
-	adminHost   string
+	web         config.Web
 }
 
 // takesChanges reports whether a request naming host may change settings: by a loopback name on a
 // loopback listener, or by the one name the owner gave.
 func (k httpKeys) takesChanges(host string) bool {
-	return k.local && loopbackHost(host) || k.adminHost != "" && strings.EqualFold(host, k.adminHost)
+	return k.local && loopbackHost(host) || k.web.MatchesHost(host)
 }
 
 // gate lets a request through to a route that asks for a. A change needs the admin key where the

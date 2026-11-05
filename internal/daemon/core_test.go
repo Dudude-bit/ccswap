@@ -1401,6 +1401,20 @@ func TestAccountWithoutFiveHourLimit(t *testing.T) {
 	if v := e.view("b"); v.NoFiveHourLimit {
 		t.Fatalf("an answer with no window at all says nothing of the plan: %+v", v)
 	}
+	e.api.set(func(f *fakeAnthropic) {
+		f.usage["atB"] = resp{200, `{"five_hour":{"utilization":"x"},"seven_day":{"utilization":10}}`}
+	})
+	e.clk.Add(time.Minute)
+	e.poll()
+	if v := e.view("b"); v.NoFiveHourLimit || v.SevenDay == nil {
+		t.Fatalf("a window that cannot be read is unknown, not absent: %+v", v)
+	}
+	e.api.set(func(f *fakeAnthropic) { f.usage["atB"] = resp{200, `{"seven_day":{"utilization":10}}`} })
+	e.clk.Add(time.Minute)
+	e.poll()
+	if v := e.view("b"); v.NoFiveHourLimit || v.SevenDay == nil {
+		t.Fatalf("only a null says the plan has no such limit: %+v", v)
+	}
 }
 
 func TestRemoteAccountWithoutFiveHourLimit(t *testing.T) {
@@ -1418,6 +1432,13 @@ func TestRemoteAccountWithoutFiveHourLimit(t *testing.T) {
 	e.poll()
 	if v := e.view("a"); !v.NoFiveHourLimit || v.FiveHour != nil {
 		t.Fatalf("the other ccswap's numbers must say the same here: %+v", v)
+	}
+	a.NoFiveHourLimit = false
+	e.clk.Add(time.Minute)
+	a.CheckedAt = timePtr(e.clk.Now().Add(-time.Second))
+	e.poll()
+	if v := e.view("a"); v.NoFiveHourLimit || v.FiveHour != nil {
+		t.Fatalf("what the other ccswap does not know stays unknown here: %+v", v)
 	}
 }
 
