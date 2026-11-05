@@ -687,7 +687,7 @@ func TestHTTPAppOffLoopbackOnlyReads(t *testing.T) {
 		r := httpDo(t, app, c.method, c.path, k.admin, c.body)
 		var e api.Error
 		json.NewDecoder(r.Body).Decode(&e)
-		if r.StatusCode != 403 || e.Code != "local_only" || e.Message != "settings can be changed only from this machine" {
+		if r.StatusCode != 403 || e.Code != "local_only" || e.Message != i18n.T("daemon.settings_local_only") {
 			t.Errorf("admin key off loopback: %s %s: %d %+v", c.method, c.path, r.StatusCode, e)
 		}
 	}
@@ -744,6 +744,46 @@ func TestChangesNeedALoopbackHost(t *testing.T) { // DNS rebinding: a foreign na
 	for _, host := range []string{"127.0.0.1:8318", "127.0.0.1", "localhost:9", "LocalHost", "[::1]:8318", "[::1]"} {
 		if r := httpDoHost(t, app, host, "POST", "/v1/refresh", keys.admin, ""); r.StatusCode != 204 {
 			t.Errorf("Host %q: %d", host, r.StatusCode)
+		}
+	}
+}
+
+func TestAdminURLTakesChanges(t *testing.T) {
+	const host = "ccswap.example.com"
+	for _, local := range []bool{true, false} {
+		f := &fakeCore{}
+		k := keys
+		k.local, k.adminHost = local, host
+		app := newHTTPApp(f, fakeHub{}, k)
+		for _, c := range adminRoutes {
+			if r := httpDoHost(t, app, host, c.method, c.path, k.admin, c.body); r.StatusCode/100 != 2 {
+				t.Errorf("local %v, admin key at the named host, %s %s: %d", local, c.method, c.path, r.StatusCode)
+			}
+			if r := httpDoHost(t, app, host, c.method, c.path, k.read, c.body); r.StatusCode != 403 || errCode(t, r) != "read_only" {
+				t.Errorf("local %v, read key at the named host, %s %s: %d", local, c.method, c.path, r.StatusCode)
+			}
+			if r := httpDoHost(t, app, "evil.example.com", c.method, c.path, k.admin, c.body); r.StatusCode != 403 || errCode(t, r) != "local_only" {
+				t.Errorf("local %v, another name, %s %s: %d", local, c.method, c.path, r.StatusCode)
+			}
+			if r := httpDoHost(t, app, "127.0.0.1:8318", c.method, c.path, k.admin, c.body); (r.StatusCode/100 == 2) != local {
+				t.Errorf("local %v, a loopback name, %s %s: %d", local, c.method, c.path, r.StatusCode)
+			}
+		}
+		if r := httpDoHost(t, app, "CCSWAP.example.com", "POST", "/v1/refresh", k.admin, ""); r.StatusCode != 204 {
+			t.Errorf("a Host differs only in case: %d", r.StatusCode)
+		}
+		r := httpDoHost(t, app, host, "POST", "/v1/web/session", "", `{"code":"c0de"}`)
+		var s api.WebSession
+		if json.NewDecoder(r.Body).Decode(&s); r.StatusCode != 200 || s.Key != k.admin {
+			t.Errorf("local %v, a code at the named host: %d", local, r.StatusCode)
+		}
+		if r := httpDoHost(t, app, "evil.example.com", "POST", "/v1/web/session", "", `{"code":"c0de"}`); r.StatusCode != 403 || errCode(t, r) != "local_only" {
+			t.Errorf("local %v, a code at another name: %d", local, r.StatusCode)
+		}
+		for _, c := range socketRoutes {
+			if r := httpDoHost(t, app, host, c.method, c.path, k.admin, c.body); r.StatusCode/100 == 2 {
+				t.Errorf("local %v, socket route %s %s served at the named host: %d", local, c.method, c.path, r.StatusCode)
+			}
 		}
 	}
 }

@@ -444,6 +444,7 @@ components:
           description: Who held Claude Code over the last 24 hours, oldest first; the current holder's shift has no end, and time it held no known account has no shift
           items: {$ref: "#/components/schemas/Shift"}
         listen: {type: string, description: "The address the TCP listener (T3 Code, the web page) is bound to, such as 127.0.0.1:8318; absent while it is off"}
+        admin_url: {type: string, description: "[web] admin_url: the address where the page takes changes besides loopback, and where ccswap web sends you; absent when unset or while the listener is off"}
         thresholds: {$ref: "#/components/schemas/Thresholds"}
         update: {$ref: "#/components/schemas/Release"}
         warning: {type: string, description: Non-fatal warning of the last operation}
@@ -496,7 +497,7 @@ components:
         resets_at: {type: string, format: date-time}
     Account:
       type: object
-      required: [name, email, priority, enabled, needs_login, active, exhausted, login_ending, models]
+      required: [name, email, priority, enabled, needs_login, active, exhausted, login_ending, no_five_hour_limit, models]
       properties:
         name: {type: string}
         email: {type: string}
@@ -526,6 +527,7 @@ components:
         leaves_at: {type: string, format: date-time, description: "Account in use only: when it reaches the five-hour, weekly or a per-model weekly threshold at its pace in use over the last hour, whichever comes first; absent when the pace is unknown or flat, or the window resets first"}
         five_hour: {$ref: "#/components/schemas/Window"}
         seven_day: {$ref: "#/components/schemas/Window"}
+        no_five_hour_limit: {type: boolean, description: "Anthropic's last answer has a weekly window and no five-hour one: this plan has no such limit, as a verified Ultra has none. False before the first answer, when five_hour is just unknown"}
         models:
           type: array
           items: {$ref: "#/components/schemas/ModelWindow"}

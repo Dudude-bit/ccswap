@@ -91,7 +91,8 @@ GitHub, over HTTPS:
 - An update never copies the environment of the shell it runs in into the service: the daemon restarts in
   its own process, and its service and the hook stay as installed. `ccswap update` restarts only a daemon
   that runs the binary it replaced.
-- The page's Update needs the admin key, a loopback listener and a loopback `Host`, like any other change.
+- The page's Update needs the admin key, and a loopback listener and `Host` or the `Host` of
+  `[web] admin_url`, like any other change.
   The read key cannot start an update.
 
 ## The local API
@@ -123,6 +124,15 @@ GitHub, over HTTPS:
   - A change is taken only when the listener is on a loopback address and the request's `Host` names
     one (`127.0.0.1`, `[::1]` or `localhost`), so a site that rebinds its name to 127.0.0.1 gets
     nothing. A listener on any other address only reads, even with the admin key.
+  - **`[web] admin_url`** (off by default) adds one exception, on any listener: a request whose `Host`
+    is that address's takes the changes above, and can trade a code from `ccswap web` for the admin key.
+    So `POST /v1/web/session` and the admin key's routes answer wherever that address reaches, the
+    internet included. What guards them is a one-time code of 128 random bits that lasts a minute, and a
+    256-bit admin key that stays in the tab; the read key still only reads there, and what the socket alone
+    serves stays on the socket. The address must be https, or plain http to a loopback, private or CGNAT
+    address. Whatever ends TLS on the way, a tunnel or a proxy, sees the code and the key. Whoever
+    holds the link within its minute, or the key at any time, can change settings, switch accounts without
+    forcing and install the newest published release; they cannot read a token.
   - Everything else is served on the socket only: a forced switch, adding and removing accounts, the
     hook signal, the language, the web codes, `remote`, `migrate` and the restart `ccswap update` asks
     for, among others.

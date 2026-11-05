@@ -1367,6 +1367,73 @@ func freeAddr(t *testing.T) string {
 	return ln.Addr().String()
 }
 
+func TestAccountWithoutFiveHourLimit(t *testing.T) {
+	e := newTenv(t)
+	if v := e.view("b"); v.NoFiveHourLimit {
+		t.Fatal("before the first answer, five_hour is unknown, not absent")
+	}
+	reset := t0.Add(48 * time.Hour).Format(time.RFC3339)
+	e.api.set(func(f *fakeAnthropic) {
+		f.usage["atB"] = resp{200, fmt.Sprintf(`{"five_hour":null,"seven_day":{"utilization":10,"resets_at":%q}}`, reset)}
+	})
+	e.poll()
+	v := e.view("b")
+	if !v.NoFiveHourLimit || v.FiveHour != nil || v.SevenDay == nil || v.Exhausted {
+		t.Fatalf("an answer with only a weekly window: %+v", v)
+	}
+	e.api.set(func(f *fakeAnthropic) { f.usage["atB"] = resp{500, `{}`} })
+	e.clk.Add(time.Minute)
+	e.poll()
+	if v := e.view("b"); !v.NoFiveHourLimit || v.Error == nil {
+		t.Fatalf("a failed check must keep what the last answer said: %+v", v)
+	}
+	e.api.set(func(f *fakeAnthropic) {
+		f.usage["atB"] = resp{200, `{"five_hour":{"utilization":0},"seven_day":{"utilization":10}}`}
+	})
+	e.clk.Add(time.Minute)
+	e.poll()
+	if v := e.view("b"); v.NoFiveHourLimit || v.FiveHour == nil {
+		t.Fatalf("a window not started is still a limit: %+v", v)
+	}
+	e.api.set(func(f *fakeAnthropic) { f.usage["atB"] = resp{200, `{}`} })
+	e.clk.Add(time.Minute)
+	e.poll()
+	if v := e.view("b"); v.NoFiveHourLimit {
+		t.Fatalf("an answer with no window at all says nothing of the plan: %+v", v)
+	}
+}
+
+func TestRemoteAccountWithoutFiveHourLimit(t *testing.T) {
+	e := newTenv(t)
+	ctx := context.Background()
+	at := e.clk.Now().Add(-30 * time.Second)
+	a := remoteAcct("a@x", 33, at)
+	a.FiveHour, a.NoFiveHourLimit = nil, true
+	a.SevenDay = &api.Window{Utilization: 12}
+	srv := fakeRemote(t, "k", func() []api.Account { return []api.Account{a} })
+	key := "k"
+	if err := e.d.SetRemote(ctx, api.RemoteRequest{Url: srv.URL, Key: &key}); err != nil {
+		t.Fatal(err)
+	}
+	e.poll()
+	if v := e.view("a"); !v.NoFiveHourLimit || v.FiveHour != nil {
+		t.Fatalf("the other ccswap's numbers must say the same here: %+v", v)
+	}
+}
+
+func TestStatusNamesAdminURLWhileListening(t *testing.T) {
+	e := newTenv(t)
+	ctx := context.Background()
+	e.d.o.Config.Web.AdminURL = "https://ccswap.example.com"
+	if st, _ := e.d.Status(ctx); st.AdminUrl != nil {
+		t.Fatalf("listener off: %v", *st.AdminUrl)
+	}
+	e.d.listen = "127.0.0.1:8318"
+	if st, _ := e.d.Status(ctx); st.AdminUrl == nil || *st.AdminUrl != "https://ccswap.example.com" {
+		t.Fatalf("listening: %v", st.AdminUrl)
+	}
+}
+
 func TestT3ListenerServesAndStops(t *testing.T) {
 	e := newTenv(t)
 	addr := freeAddr(t)

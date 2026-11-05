@@ -271,8 +271,11 @@ func (d *Daemon) startHTTP(ctx context.Context, cancel context.CancelFunc) func(
 		slog.Error("http: cannot listen, listener off", "addr", d.o.Config.T3.Listen, "err", err)
 		return func() {}
 	}
-	k := httpKeys{read: read, admin: admin, local: ln.Addr().(*net.TCPAddr).IP.IsLoopback()}
-	if !k.local {
+	k := httpKeys{read: read, admin: admin, local: ln.Addr().(*net.TCPAddr).IP.IsLoopback(), adminHost: d.o.Config.Web.AdminHost()}
+	switch {
+	case k.adminHost != "":
+		slog.Info("http: the page takes changes at [web] admin_url", "url", d.o.Config.Web.AdminURL)
+	case !k.local:
 		slog.Info("http: not on a loopback address, so the page and T3 Code only read", "addr", ln.Addr())
 	}
 	d.mu.Lock()
@@ -1484,7 +1487,7 @@ func (d *Daemon) view(st store.State, a store.Account) api.Account {
 	d.mu.Unlock()
 	v := api.Account{Name: a.Name, Email: a.Email, Priority: a.Priority, Enabled: a.Enabled, NeedsLogin: a.NeedsLogin,
 		Active: active, Models: []api.ModelWindow{}, CheckedAt: timePtr(u.checkedAt), LeavesAt: timePtr(leaves),
-		FiveHour: window(u.fiveHour), SevenDay: window(u.sevenDay)}
+		FiveHour: window(u.fiveHour), SevenDay: window(u.sevenDay), NoFiveHourLimit: u.fiveHour == nil && u.sevenDay != nil}
 	s, now := stateOf(a, &u), d.o.Now()
 	if r := policy.ExhaustedBy(s, d.th(), now); r != "" {
 		v.Exhausted, v.ExhaustedReason, v.LeavesAt = true, &r, nil // leaving already
@@ -1528,6 +1531,9 @@ func (d *Daemon) Status(context.Context) (api.Status, error) {
 		Thresholds: thresholdsOf(d.th()), Remote: d.remoteStatus(), Update: d.newer()}
 	if listen != "" {
 		s.Listen = &listen
+		if u := d.o.Config.Web.AdminURL; u != "" {
+			s.AdminUrl = &u
+		}
 	}
 	if unknown {
 		s.Active = ""

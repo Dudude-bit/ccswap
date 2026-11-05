@@ -53,8 +53,11 @@ func newWebCmd() *cobra.Command {
 				return err
 			}
 			out := cmd.OutOrStdout()
-			link := links[0]
-			if local {
+			link, adminURL := links[0], st.JSON200.AdminUrl
+			if adminURL != nil {
+				link = *adminURL + web.Page
+			}
+			if local || adminURL != nil {
 				r, err := cl.CreateWebCodeWithResponse(ctx)
 				if err != nil {
 					return down(err)
@@ -68,7 +71,7 @@ func newWebCmd() *cobra.Command {
 				link += "#code=" + r.JSON200.Code
 				fmt.Fprintln(out, link)
 				fmt.Fprintln(out, i18n.T("page.link_once"))
-				if claudecode.GOOS != "darwin" {
+				if adminURL == nil && claudecode.GOOS != "darwin" {
 					_, port, _ := net.SplitHostPort(listen)
 					fmt.Fprintf(out, i18n.T("page.ssh_tunnel_hint"), port, listen)
 				}
@@ -88,7 +91,7 @@ func newWebCmd() *cobra.Command {
 
 // listenLinks are the links to path on the listener: the listen address, or for a listener on all
 // interfaces a loopback link first, then one per non-loopback IPv4 address. local: the listener is on
-// a loopback address, the only one where the page may change settings.
+// a loopback address, where the page may change settings without [web] admin_url.
 func listenLinks(listen, path string) (links []string, local bool, err error) {
 	host, port, err := net.SplitHostPort(listen)
 	if err != nil {

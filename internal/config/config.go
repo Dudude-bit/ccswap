@@ -44,6 +44,19 @@ type UI struct{ Lang string }
 // Update: Check has the daemon ask GitHub for ccswap's newest release.
 type Update struct{ Check bool }
 
+// Web: AdminURL is where the page is opened from other computers and may change settings; "" keeps
+// changes to loopback.
+type Web struct{ AdminURL string }
+
+// AdminHost is the Host a browser sends to AdminURL, which never carries the scheme's default port.
+func (w Web) AdminHost() string {
+	u, err := url.Parse(w.AdminURL)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(u.Host, map[string]string{"https": ":443", "http": ":80"}[u.Scheme])
+}
+
 type Config struct {
 	PollInterval time.Duration
 	Thresholds   Thresholds
@@ -52,6 +65,7 @@ type Config struct {
 	Remote       Remote
 	UI           UI
 	Update       Update
+	Web          Web
 }
 
 // DefaultHome is the app dir without $CCSWAP_HOME: ~/Library/Application Support/ccswap on macOS,
@@ -122,6 +136,9 @@ type file struct {
 	Update struct {
 		Check bool `toml:"check"`
 	} `toml:"update"`
+	Web struct {
+		AdminURL string `toml:"admin_url"`
+	} `toml:"web"`
 }
 
 func Load(home string) (Config, error) {
@@ -177,6 +194,11 @@ func Load(home string) (Config, error) {
 			return Config{}, i18n.Err("config.remote_url_error", err)
 		}
 	}
+	if f.Web.AdminURL != "" {
+		if err := CheckAdminURL(f.Web.AdminURL); err != nil {
+			return Config{}, i18n.Err("config.admin_url_error", err)
+		}
+	}
 	if _, ok := i18n.Pin(f.UI.Lang); !ok {
 		var codes []string
 		for _, l := range i18n.Available() {
@@ -192,6 +214,7 @@ func Load(home string) (Config, error) {
 		Remote:       Remote{f.Remote.URL},
 		UI:           UI{f.UI.Lang},
 		Update:       Update{f.Update.Check},
+		Web:          Web{strings.TrimRight(f.Web.AdminURL, "/")},
 	}, nil
 }
 
@@ -213,6 +236,18 @@ func CheckRemote(raw string) error {
 		return nil
 	}
 	return i18n.Err("config.remote_plain_http")
+}
+
+// CheckAdminURL holds the page's address to CheckRemote's rule, as the admin key travels to it, and to
+// a bare origin, as the page sits at the root of the listener.
+func CheckAdminURL(raw string) error {
+	if err := CheckRemote(raw); err != nil {
+		return err
+	}
+	if u, _ := url.Parse(raw); strings.Trim(u.Path, "/") != "" || u.RawQuery != "" || u.Fragment != "" {
+		return i18n.Err("config.admin_url_not_origin")
+	}
+	return nil
 }
 
 var cgnat = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)} // Tailscale and other CGNAT ranges
