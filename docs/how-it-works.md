@@ -167,6 +167,9 @@ ccswap refreshes only the vault logins of accounts Claude Code is not using (pac
 The daemon asks `GET https://api.anthropic.com/api/oauth/usage` with the account's access token and the
 header `anthropic-beta: oauth-2025-04-20` (package `anthropic`). It reads `five_hour`, `seven_day`,
 `seven_day_opus`, `seven_day_sonnet`, and the `limits` entries of kind `weekly_scoped` that name a model.
+An answer with a `seven_day` and a null `five_hour` means the plan has no 5-hour limit, as a verified Ultra
+has none (`no_five_hour_limit` in the API): a window that has not started is still a window, at 0, and a
+missing or unreadable `five_hour` says nothing of the plan.
 Requests time out after 15 seconds, and at most four accounts are asked at once. Every request carries
 the user agent `ccswap/<version>`.
 
@@ -257,15 +260,16 @@ web page, part of the API and the T3 Code hub:
 | The page and its files (`/management.html`, scripts, styles, fonts), with a Content Security Policy that allows nothing from other origins | nothing: they hold no data |
 | `GET /v1/i18n/<tag>`, the page's texts | nothing: they hold no secret |
 | `GET /v1/status`, `GET /v1/accounts`, `GET /v1/events` | the read key or the admin key |
-| `PATCH /v1/accounts/{name}`, `POST /v1/accounts/{name}/activate` (never forced), `PUT /v1/auto`, `PUT /v1/strategy`, `PUT /v1/thresholds`, `POST /v1/refresh`, `POST /v1/accounts/{name}/refresh`, `POST /v1/update` | the admin key, a listener on a loopback address, and a `Host` that names a loopback address or `localhost` |
-| `POST /v1/web/session`: trades a one-time code from `ccswap web` for the admin key | the code, a loopback listener and a loopback `Host` |
+| `PATCH /v1/accounts/{name}`, `POST /v1/accounts/{name}/activate` (never forced), `PUT /v1/auto`, `PUT /v1/strategy`, `PUT /v1/thresholds`, `POST /v1/refresh`, `POST /v1/accounts/{name}/refresh`, `POST /v1/update` | the admin key, and a listener on a loopback address with a `Host` that names a loopback address or `localhost`, or on any listener the `Host` of `[web] admin_url` |
+| `POST /v1/web/session`: trades a one-time code from `ccswap web` for the admin key | the code, and a loopback listener and `Host` or the `Host` of `[web] admin_url` |
 | `POST /v1/accounts/{name}/login`, `POST /v1/accounts/{name}/login/code`, `DELETE /v1/accounts/{name}/login?id=…`: an account's new login from the page | the read key or the admin key, on any listener and `Host`; replacing a link that waits for its code, or starting one within 30 seconds of the account's last start, the admin key |
 | `GET /v0/management/auth-files`, `POST /v0/management/api-call`, `POST /v0/management/reset-quota`: the part of CLIProxyAPI's management API T3 Code reads | the read key or the admin key |
 
 Everything else, such as adding and removing accounts, a forced switch, the hook signal, `remote`,
 `migrate`, the language, the web codes and the restart `ccswap update` asks for, is served on the socket
 only. The `Host` check stops a site whose name was pointed at 127.0.0.1 (DNS rebinding) from changing
-anything.
+anything; `[web] admin_url` names the one other `Host` to trust, and `ccswap web` links to it (after the
+loopback link, when the listener is on loopback). Only the socket's status names that address.
 
 **A login from the page** renews an account that is already here. `POST /v1/accounts/{name}/login`
 makes a `login-*` folder, runs `claude auth login` in it as `ccswap login` does (`CCSWAP_CLAUDE_BIN`,

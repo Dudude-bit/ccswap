@@ -403,6 +403,9 @@ body:not(.ro) .viewer { display: none !important; }
 .gauge.over .g-num { color: var(--crit); }
 .gauge.none .g-num { color: var(--mut); }
 .gauge.none .g-num small { display: none; }
+.gauges:has(.gauge.no-limit) { grid-template-columns: max-content 1fr; }
+.gauge.no-limit .g-num { font-size: 20px; letter-spacing: 0; line-height: 1.45; margin-bottom: 0; }
+.gauge.no-limit .bar, .gauge.no-limit .g-tick { display: none; }
 .d-note { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 13px; color: var(--mut); }
 .d-note.bad { color: var(--crit); font-weight: 500; }
 
@@ -563,6 +566,7 @@ body:not(.ro) .viewer { display: none !important; }
 .mbar .tick { position: absolute; top: -3px; bottom: -3px; left: var(--t, 100%); width: 1.5px; margin-left: -.75px; background: var(--mut); }
 .use-line.over .mbar .fill { background: var(--crit); }
 .use-line.none .pc { color: var(--mut); }
+.use-line.no-limit .rs { grid-column: 1 / -1; }
 .use-model { display: block; font-size: 13px; color: var(--mut); line-height: 1.3; }
 .use-model.over { color: var(--crit); }
 .no-models .c-models { display: none !important; }
@@ -738,6 +742,7 @@ body:not(.ro) .viewer { display: none !important; }
   .tag { font-size: 22px; min-height: 38px; padding: 0 12px; }
   .models { margin-left: 0; flex-wrap: wrap; }
   .gauges { grid-template-columns: 1fr 1fr; gap: 20px; }
+  .gauges:has(.gauge.no-limit) { grid-template-columns: 1fr; }
   .g-head { flex-direction: column; gap: 0; }
   .g-reset { text-align: left; white-space: normal; font-size: 12.5px; }
   .g-num { font-size: 40px; }

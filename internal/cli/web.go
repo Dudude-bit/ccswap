@@ -53,22 +53,38 @@ func newWebCmd() *cobra.Command {
 				return err
 			}
 			out := cmd.OutOrStdout()
-			link := links[0]
-			if local {
-				r, err := cl.CreateWebCodeWithResponse(ctx)
-				if err != nil {
-					return down(err)
+			link, adminURL := links[0], st.JSON200.AdminUrl
+			if !local && adminURL != nil {
+				link = *adminURL + web.Page
+			}
+			if local || adminURL != nil {
+				code := func() (string, error) {
+					r, err := cl.CreateWebCodeWithResponse(ctx)
+					if err != nil {
+						return "", down(err)
+					}
+					if err := apiErr(r.StatusCode(), r.Body, "", 200); err != nil {
+						return "", err
+					}
+					if r.JSON200 == nil {
+						return "", errBadResp
+					}
+					return r.JSON200.Code, nil
 				}
-				if err := apiErr(r.StatusCode(), r.Body, "", 200); err != nil {
+				c, err := code()
+				if err != nil {
 					return err
 				}
-				if r.JSON200 == nil {
-					return errBadResp
-				}
-				link += "#code=" + r.JSON200.Code
+				link += "#code=" + c
 				fmt.Fprintln(out, link)
 				fmt.Fprintln(out, i18n.T("page.link_once"))
-				if claudecode.GOOS != "darwin" {
+				if local && adminURL != nil { // this machine keeps its loopback link; other computers get admin_url's, with a code of its own
+					if c, err = code(); err != nil {
+						return err
+					}
+					fmt.Fprintf(out, i18n.T("page.admin_url_link"), *adminURL+web.Page+"#code="+c)
+				}
+				if adminURL == nil && claudecode.GOOS != "darwin" {
 					_, port, _ := net.SplitHostPort(listen)
 					fmt.Fprintf(out, i18n.T("page.ssh_tunnel_hint"), port, listen)
 				}
@@ -88,7 +104,7 @@ func newWebCmd() *cobra.Command {
 
 // listenLinks are the links to path on the listener: the listen address, or for a listener on all
 // interfaces a loopback link first, then one per non-loopback IPv4 address. local: the listener is on
-// a loopback address, the only one where the page may change settings.
+// a loopback address, where the page may change settings without [web] admin_url.
 func listenLinks(listen, path string) (links []string, local bool, err error) {
 	host, port, err := net.SplitHostPort(listen)
 	if err != nil {

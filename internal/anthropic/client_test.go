@@ -231,4 +231,8 @@ func TestBodyRoundTrips(t *testing.T) {
 	if string(Body(Usage{})) != "{}" {
 		t.Fatal(string(Body(Usage{})))
 	}
+	none := Usage{NoFiveHour: true, SevenDay: &Window{Utilization: 17.5}}
+	if got, err := ParseUsage(Body(none)); err != nil || !reflect.DeepEqual(got, none) {
+		t.Fatalf("%+v %v\n%s", got, err, Body(none))
+	}
 }

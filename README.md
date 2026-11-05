@@ -274,7 +274,9 @@ does not know, add it with `ccswap adopt <name>` first.
 
 **When it moves.** The account in use is left when it reaches a threshold:
 
-- 95% of its 5-hour window (`five_hour`),
+- 95% of its 5-hour window (`five_hour`), on a plan that has one: Anthropic's answer has no such window
+  for a verified Ultra, so only the weekly limits count, the page and `ccswap tui` show "no limit" there,
+  and `ccswap list` "none" in its 5H column,
 - 98% of its weekly window, or of a per-model weekly window such as Sonnet's (`weekly`),
 - or when a session stops on a usage limit: the hook reports it, and the account counts as at its limit
   for an hour, or until the window the message names resets if that comes sooner (for a message that names
@@ -383,7 +385,8 @@ redirects there); `[t3] enabled = false` turns it off. Two keys guard it:
   `sessionStorage`, so it is gone with the tab. Run `ccswap web` again for a new tab.
 
 Settings change only through a listener on a loopback address (the default) and a page opened by a
-loopback name (`127.0.0.1`, `localhost` or `[::1]`). To look at the page from your phone or another
+loopback name (`127.0.0.1`, `localhost` or `[::1]`), or at the address you name in `[web] admin_url`
+(below). To look at the page from your phone or another
 computer, listen on all interfaces and run `ccswap daemon install` and `ccswap web`, which then prints a
 link per address; such a listener only shows, even with the admin key:
 
@@ -395,6 +398,21 @@ listen = "0.0.0.0:8318"
 The listener speaks plain HTTP. Outside a network you trust, keep it on loopback and use an SSH tunnel:
 `ssh -L 8318:127.0.0.1:8318 server`, then run `ccswap web` on the server and open its link on your
 computer within the minute.
+
+To change settings on the page from another computer, say behind a tunnel or a reverse proxy, name the
+address you open it at and run `ccswap daemon install`:
+
+```toml
+[web]
+admin_url = "https://ccswap.example.com"
+```
+
+`ccswap web` then prints a link to that address, so run it on the computer running ccswap and open the link
+within the minute; with a loopback listener it prints the loopback link first and opens that one, as that
+computer needs no detour. The page there takes every change it takes on loopback; under any other name it still
+only looks, and the read key only looks everywhere. The address must be https, or plain http to a
+loopback, private or CGNAT address, with nothing after the host. It is off by default; SECURITY.md says
+what it opens.
 
 Each ccswap switches only the Claude Code on its own computer, and its page names that computer. A forced
 switch and adding, logging in and removing accounts stay in the terminal. The page speaks every language
@@ -591,6 +609,9 @@ config_dir = ""           # Claude Code's config folder, if you run it with CLAU
 [remote]
 url = ""                  # another ccswap to take the limits from; ccswap remote set sets it
 
+[web]
+admin_url = ""            # the page's address from other computers, where it may also change settings; "" keeps changes to loopback
+
 [ui]
 lang = ""                 # a pinned language (en, ru); ccswap lang sets it; "" follows the locale
 
@@ -662,7 +683,7 @@ ccswap holds the logins of several accounts and runs a local HTTP listener. In s
   in `~/.claude.json` and one `StopFailure` hook in `~/.claude/settings.json`.
 - The full API is on a Unix socket only your user can open. The TCP listener serves a part of it: the
   read key only reads and logs an account in again, settings need the admin key from `ccswap web` and a
-  loopback listener, and a forced switch, adding and removing accounts, `remote` and `migrate` are never
+  loopback listener or the address in `[web] admin_url`, and a forced switch, adding and removing accounts, `remote` and `migrate` are never
   served over TCP.
 - The listener's read and admin keys last until you replace them. SECURITY.md says how to replace a
   leaked one.

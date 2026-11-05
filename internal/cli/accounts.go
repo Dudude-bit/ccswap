@@ -298,8 +298,12 @@ func newListCmd() *cobra.Command {
 				if a.Active {
 					mark = "▶"
 				}
+				five := pct(a.FiveHour)
+				if a.NoFiveHourLimit {
+					five = i18n.T("list.no_limit")
+				}
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n", mark, a.Name, a.Email, a.Priority,
-					pct(a.FiveHour), pct(a.SevenDay), tui.ResetText(a, time.Now()), stateText(a))
+					five, pct(a.SevenDay), tui.ResetText(a, time.Now()), stateText(a))
 			}
 			if err := tw.Flush(); err != nil {
 				return err

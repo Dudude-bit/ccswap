@@ -266,6 +266,40 @@ func TestTokenKeyRefreshesTheSelectedLogin(t *testing.T) {
 	}
 }
 
+func TestNoFiveHourLimitIsNotMissingData(t *testing.T) {
+	f := fixture()
+	f.accts[0].FiveHour, f.accts[0].NoFiveHourLimit = nil, true // work, in use
+	next := "old"
+	f.st.Next = &next
+	for _, width := range []int{100, 64, 50} {
+		v := text(loadedAt(t, f, width))
+		if !strings.Contains(v, i18n.T("tui.no_limit")) {
+			t.Errorf("%d cols: the table must say so:\n%s", width, v)
+		}
+		if !strings.Contains(v, i18n.T("tui.no_limit_plan")) {
+			t.Errorf("%d cols: the panel must say so:\n%s", width, v)
+		}
+		if strings.Contains(v, i18n.T("tui.no_data_yet")) {
+			t.Errorf("%d cols: no limit shown as no data:\n%s", width, v)
+		}
+		if strings.Contains(v, i18n.T("tui.next_when_left", "5%", "2%")) || strings.Contains(v, i18n.T("tui.next_at_left", "5%", "2%")) {
+			t.Errorf("%d cols: a threshold this account does not have:\n%s", width, v)
+		}
+		fits(t, v, width)
+	}
+	if v := text(loadedAt(t, f, 100)); !strings.Contains(v, i18n.T("tui.next_when_week_left", "2%")) {
+		t.Errorf("the weekly threshold is what is left to say:\n%s", v)
+	}
+	if v := text(loadedAt(t, f, 64)); !strings.Contains(v, i18n.T("tui.next_at_week_left", "2%")) {
+		t.Errorf("narrow, the weekly threshold is what is left to say:\n%s", v)
+	}
+	g := fixture()
+	g.accts[0].FiveHour = nil // no answer yet
+	if v := text(loadedAt(t, g, 100)); !strings.Contains(v, i18n.T("tui.no_data_yet")) || strings.Contains(v, i18n.T("tui.no_limit")) {
+		t.Errorf("unknown numbers are not a missing limit:\n%s", v)
+	}
+}
+
 func TestLoginEndsAreShown(t *testing.T) {
 	f := fixture()
 	now := time.Now()

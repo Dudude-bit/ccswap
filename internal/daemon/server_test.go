@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -21,6 +22,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 
 	"github.com/Dudude-bit/ccswap/internal/api"
+	"github.com/Dudude-bit/ccswap/internal/config"
 	"github.com/Dudude-bit/ccswap/internal/i18n"
 	"github.com/Dudude-bit/ccswap/internal/migrate"
 	"github.com/Dudude-bit/ccswap/internal/store"
@@ -687,7 +689,7 @@ func TestHTTPAppOffLoopbackOnlyReads(t *testing.T) {
 		r := httpDo(t, app, c.method, c.path, k.admin, c.body)
 		var e api.Error
 		json.NewDecoder(r.Body).Decode(&e)
-		if r.StatusCode != 403 || e.Code != "local_only" || e.Message != "settings can be changed only from this machine" {
+		if r.StatusCode != 403 || e.Code != "local_only" || e.Message != i18n.T("daemon.settings_local_only") {
 			t.Errorf("admin key off loopback: %s %s: %d %+v", c.method, c.path, r.StatusCode, e)
 		}
 	}
@@ -744,6 +746,111 @@ func TestChangesNeedALoopbackHost(t *testing.T) { // DNS rebinding: a foreign na
 	for _, host := range []string{"127.0.0.1:8318", "127.0.0.1", "localhost:9", "LocalHost", "[::1]:8318", "[::1]"} {
 		if r := httpDoHost(t, app, host, "POST", "/v1/refresh", keys.admin, ""); r.StatusCode != 204 {
 			t.Errorf("Host %q: %d", host, r.StatusCode)
+		}
+	}
+}
+
+// adminURLCore names admin_url in every status it returns.
+type adminURLCore struct{ *fakeCore }
+
+func withAdminURL(st api.Status, err error) (api.Status, error) {
+	u := "https://ccswap.example.com"
+	st.AdminUrl = &u
+	return st, err
+}
+
+func (c adminURLCore) Status(ctx context.Context) (api.Status, error) {
+	return withAdminURL(c.fakeCore.Status(ctx))
+}
+
+func (c adminURLCore) Activate(ctx context.Context, name string, force bool) (api.Status, error) {
+	return withAdminURL(c.fakeCore.Activate(ctx, name, force))
+}
+
+// TestTCPCoreHidesAdminURLEverywhere: every Core method that returns a status, the ones to come too,
+// leaves admin_url out on the TCP listener.
+func TestTCPCoreHidesAdminURLEverywhere(t *testing.T) {
+	status := reflect.TypeFor[api.Status]()
+	core := reflect.TypeFor[Core]()
+	for i := range core.NumMethod() {
+		m := core.Method(i)
+		if m.Type.NumOut() == 0 || m.Type.Out(0) != status {
+			continue
+		}
+		call := func(c Core) api.Status {
+			args := []reflect.Value{reflect.ValueOf(context.Background())}
+			for j := 1; j < m.Type.NumIn(); j++ {
+				args = append(args, reflect.Zero(m.Type.In(j)))
+			}
+			return reflect.ValueOf(c).MethodByName(m.Name).Call(args)[0].Interface().(api.Status)
+		}
+		if call(adminURLCore{&fakeCore{}}).AdminUrl == nil {
+			t.Fatalf("adminURLCore must name admin_url in %s too", m.Name)
+		}
+		if call(tcpCore{adminURLCore{&fakeCore{}}}).AdminUrl != nil {
+			t.Errorf("%s over TCP names admin_url", m.Name)
+		}
+	}
+}
+
+func TestAdminURLStaysOnTheSocket(t *testing.T) { // where changes are taken is not for every key holder
+	app := newHTTPApp(adminURLCore{&fakeCore{}}, fakeHub{}, keys)
+	for _, key := range []string{keys.read, keys.admin} {
+		var st api.Status
+		if r := httpDo(t, app, "GET", "/v1/status", key, ""); json.NewDecoder(r.Body).Decode(&st) != nil || r.StatusCode != 200 || st.AdminUrl != nil {
+			t.Fatalf("status over TCP: %d %v", r.StatusCode, st.AdminUrl)
+		}
+	}
+	if b, err := snap(tcpCore{adminURLCore{&fakeCore{}}}); err != nil || strings.Contains(string(b), "admin_url") {
+		t.Fatalf("events over TCP: %s %v", b, err)
+	}
+	if st, _ := (strict{adminURLCore{&fakeCore{}}}).c.Status(context.Background()); st.AdminUrl == nil {
+		t.Fatal("the socket lost it")
+	}
+}
+
+func TestAdminURLTakesChanges(t *testing.T) {
+	const host = "ccswap.example.com"
+	for _, local := range []bool{true, false} {
+		f := &fakeCore{}
+		k := keys
+		k.local, k.web = local, config.Web{AdminURL: "https://" + host}
+		app := newHTTPApp(f, fakeHub{}, k)
+		for _, c := range adminRoutes {
+			if r := httpDoHost(t, app, host, c.method, c.path, k.admin, c.body); r.StatusCode/100 != 2 {
+				t.Errorf("local %v, admin key at the named host, %s %s: %d", local, c.method, c.path, r.StatusCode)
+			}
+			if r := httpDoHost(t, app, host, c.method, c.path, k.read, c.body); r.StatusCode != 403 || errCode(t, r) != "read_only" {
+				t.Errorf("local %v, read key at the named host, %s %s: %d", local, c.method, c.path, r.StatusCode)
+			}
+			if r := httpDoHost(t, app, "evil.example.com", c.method, c.path, k.admin, c.body); r.StatusCode != 403 || errCode(t, r) != "local_only" {
+				t.Errorf("local %v, another name, %s %s: %d", local, c.method, c.path, r.StatusCode)
+			}
+			if r := httpDoHost(t, app, "127.0.0.1:8318", c.method, c.path, k.admin, c.body); (r.StatusCode/100 == 2) != local {
+				t.Errorf("local %v, a loopback name, %s %s: %d", local, c.method, c.path, r.StatusCode)
+			}
+		}
+		if r := httpDoHost(t, app, "CCSWAP.example.com", "POST", "/v1/refresh", k.admin, ""); r.StatusCode != 204 {
+			t.Errorf("a Host differs only in case: %d", r.StatusCode)
+		}
+		if r := httpDoHost(t, app, host+":443", "POST", "/v1/refresh", k.admin, ""); r.StatusCode != 204 {
+			t.Errorf("a Host spells out the default port: %d", r.StatusCode)
+		}
+		if r := httpDoHost(t, app, host+":8443", "POST", "/v1/refresh", k.admin, ""); r.StatusCode != 403 || errCode(t, r) != "local_only" {
+			t.Errorf("a Host names another port: %d", r.StatusCode)
+		}
+		r := httpDoHost(t, app, host, "POST", "/v1/web/session", "", `{"code":"c0de"}`)
+		var s api.WebSession
+		if json.NewDecoder(r.Body).Decode(&s); r.StatusCode != 200 || s.Key != k.admin {
+			t.Errorf("local %v, a code at the named host: %d", local, r.StatusCode)
+		}
+		if r := httpDoHost(t, app, "evil.example.com", "POST", "/v1/web/session", "", `{"code":"c0de"}`); r.StatusCode != 403 || errCode(t, r) != "local_only" {
+			t.Errorf("local %v, a code at another name: %d", local, r.StatusCode)
+		}
+		for _, c := range socketRoutes {
+			if r := httpDoHost(t, app, host, c.method, c.path, k.admin, c.body); r.StatusCode/100 == 2 {
+				t.Errorf("local %v, socket route %s %s served at the named host: %d", local, c.method, c.path, r.StatusCode)
+			}
 		}
 	}
 }

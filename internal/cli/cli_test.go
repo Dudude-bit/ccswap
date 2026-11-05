@@ -48,6 +48,7 @@ type fake struct {
 	listen   *string      // Status.Listen
 	version  string       // Status.Version
 	update   *api.Release // Status.Update
+	adminURL *string      // Status.AdminUrl
 	bin      string       // the binary the daemon runs, which Restart restarts on
 	err      error
 	delay    time.Duration // Status and Activate answer this late
@@ -81,7 +82,7 @@ func (f *fake) migrateCalls() string {
 func (f *fake) Status(context.Context) (api.Status, error) {
 	time.Sleep(f.delay)
 	return api.Status{Active: "work", Auto: true, Strategy: api.CacheAware, TargetService: "Claude Code-credentials",
-		Thresholds: api.Thresholds{FiveHour: 95, SevenDay: 98}, UnknownActive: true, Listen: f.listen, Version: f.version, Update: f.update}, f.err
+		Thresholds: api.Thresholds{FiveHour: 95, SevenDay: 98}, UnknownActive: true, Listen: f.listen, AdminUrl: f.adminURL, Version: f.version, Update: f.update}, f.err
 }
 func (f *fake) Accounts(context.Context) ([]api.Account, error) { return f.accounts, f.err }
 func (f *fake) Import(_ context.Context, r api.ImportRequest) (api.Account, error) {
@@ -289,6 +290,7 @@ func TestListTable(t *testing.T) {
 			FiveHour: &api.Window{Utilization: 42, ResetsAt: &reset}, SevenDay: &api.Window{Utilization: 7}, Models: []api.ModelWindow{}},
 		{Name: "old", Email: "o@x.y", Enabled: true, NeedsLogin: true, Models: []api.ModelWindow{}},
 		{Name: "full", Enabled: false, Exhausted: true, Models: []api.ModelWindow{}},
+		{Name: "ultra", Enabled: true, NoFiveHourLimit: true, SevenDay: &api.Window{Utilization: 7}, Models: []api.ModelWindow{}},
 	}}
 	env(t, f)
 	out, err := run(t, "", "list")
@@ -297,8 +299,15 @@ func TestListTable(t *testing.T) {
 	}
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	header := strings.Split(i18n.T("list.header"), "\t")
-	if len(lines) != 5 || !strings.Contains(lines[0], header[len(header)-1]) || lines[4] != i18n.N("list.accounts", 3) {
+	if len(lines) != 6 || !strings.Contains(lines[0], header[len(header)-1]) || lines[5] != i18n.N("list.accounts", 4) {
 		t.Fatalf("table:\n%s", out)
+	}
+	// a row's 5h cell: tabwriter aligns runes, and ▶ is one rune of three bytes
+	col := func(name string) int { return len([]rune(lines[0][:strings.Index(lines[0], name)])) }
+	from, to := col(header[4]), col(header[5])
+	five := func(l string) string { r := []rune(l); return strings.TrimSpace(string(r[from:min(to, len(r))])) }
+	if five(lines[4]) != i18n.T("list.no_limit") || five(lines[2]) != "-" {
+		t.Fatalf("no 5-hour limit reads apart from no data yet: %q %q\n%s", five(lines[4]), five(lines[2]), out)
 	}
 	if !strings.HasPrefix(lines[1], "▶") || !strings.Contains(lines[1], "42%") || !strings.Contains(lines[1], "7%") ||
 		!strings.Contains(lines[1], reset.Local().Format("15:04")) {
@@ -573,6 +582,33 @@ func TestWeb(t *testing.T) {
 	env(t, nil)
 	if _, err := run(t, "", "web"); err == nil || !strings.Contains(err.Error(), "The daemon is not running") {
 		t.Fatalf("daemon down: %v", err)
+	}
+}
+
+func TestWebAtAdminURL(t *testing.T) {
+	english(t)
+	admin := "https://ccswap.example.com"
+	remote := admin + "/management.html#code=c0de"
+	for _, tc := range []struct{ listen, open string }{
+		{"0.0.0.0:8318", remote},
+		{"127.0.0.1:8318", "http://127.0.0.1:8318/management.html#code=c0de"}, // this machine keeps its own link
+	} {
+		f := &fake{listen: &tc.listen, adminURL: &admin, version: "test"}
+		env(t, f)
+		old := openURL
+		var opened []string
+		openURL = func(u string) error { opened = append(opened, u); return nil }
+		t.Cleanup(func() { openURL = old })
+		setGOOS(t, "linux")
+		out, err := run(t, "", "web")
+		codes := 1
+		if tc.open != remote {
+			codes = 2
+		}
+		if err != nil || f.codes != codes || len(opened) != 1 || opened[0] != tc.open || !strings.HasPrefix(out, tc.open+"\n") ||
+			!strings.Contains(out, "works once") || !strings.Contains(out, remote) || strings.Contains(out, "ssh -L") {
+			t.Fatalf("%s: %v %d %q %s", tc.listen, err, f.codes, opened, out)
+		}
 	}
 }
 

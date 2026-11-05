@@ -17,6 +17,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 
 	"github.com/Dudude-bit/ccswap/internal/api"
+	"github.com/Dudude-bit/ccswap/internal/config"
 	"github.com/Dudude-bit/ccswap/internal/i18n"
 	"github.com/Dudude-bit/ccswap/internal/migrate"
 	"github.com/Dudude-bit/ccswap/internal/store"
@@ -345,8 +346,8 @@ type access int
 
 const (
 	readKey  access = iota // the read key (T3 Code, ccswap remote, the page's view) or the admin key
-	adminKey               // the admin key, and a listener on a loopback address
-	codeOnly               // no key, a one-time code from `ccswap web` in the body; a loopback listener
+	adminKey               // the admin key, where the listener takes changes
+	codeOnly               // no key, a one-time code from `ccswap web` in the body; where the listener takes changes
 	anyKey                 // either key, on any listener and Host: a new login, which only the account's own sign-in finishes
 	noKey                  // nothing: the page's texts, which its login screen needs first and which hold no secret
 )
@@ -372,16 +373,24 @@ var tcpRoutes = map[string]access{
 	"GET /v1/i18n/:lang":                 noKey,
 }
 
-// httpKeys are the TCP listener's keys; local: it listens on a loopback address.
+// httpKeys are the TCP listener's keys; local: it listens on a loopback address; web: names the other
+// address that takes changes.
 type httpKeys struct {
 	read, admin string
 	local       bool
+	web         config.Web
 }
 
-// gate lets a request through to a route that asks for a. A change needs the admin key on a loopback
-// listener: the read key in T3 Code or another ccswap, and a listener open to the network, only look.
-// A change must also name a loopback host, so a site whose name a DNS rebinding pointed at
-// 127.0.0.1 cannot trade a code or use a key it got. A new login is the exception: the store keeps it
+// takesChanges reports whether a request naming host may change settings: by a loopback name on a
+// loopback listener, or by the one name the owner gave.
+func (k httpKeys) takesChanges(host string) bool {
+	return k.local && loopbackHost(host) || k.web.MatchesHost(host)
+}
+
+// gate lets a request through to a route that asks for a. A change needs the admin key where the
+// listener takes changes: the read key in T3 Code or another ccswap, and any other name or a listener
+// open to the network, only look. Naming the host stops a site whose name a DNS rebinding pointed at
+// 127.0.0.1 from trading a code or using a key it got. A new login is the exception: the store keeps it
 // only as a new login of an account here, with its email, so whoever holds a key can at most start one
 // the owner finishes; only the admin key replaces a link that waits. The admin key marks the request's
 // context with adminCaller.
@@ -392,7 +401,7 @@ func (k httpKeys) gate(a access) fiber.Handler {
 		case a == noKey:
 		case a != codeOnly && !admin && !t3.Carries(c, k.read):
 			return c.Status(fiber.StatusUnauthorized).JSON(api.Error{Code: "unauthorized", Message: i18n.T("daemon.bad_key")})
-		case a != readKey && a != anyKey && (!k.local || !loopbackHost(string(c.Request().Host()))):
+		case a != readKey && a != anyKey && !k.takesChanges(string(c.Request().Host())):
 			return c.Status(fiber.StatusForbidden).JSON(api.Error{Code: "local_only", Message: i18n.T("daemon.settings_local_only")})
 		case a == adminKey && !admin:
 			return c.Status(fiber.StatusForbidden).JSON(api.Error{Code: "read_only", Message: i18n.T("daemon.read_only_key")})
@@ -449,6 +458,22 @@ func (r tcpRouter) Delete(p string, h any, hs ...any) fiber.Router {
 // adminCaller marks the context of a TCP request with the admin key.
 type adminCaller struct{}
 
+// tcpCore is the Core as the TCP listener shows it: admin_url, where changes are taken, is for `ccswap web`
+// on the socket, not for every holder of a key, so its status and events leave it out.
+type tcpCore struct{ Core }
+
+func (c tcpCore) Status(ctx context.Context) (api.Status, error) {
+	st, err := c.Core.Status(ctx)
+	st.AdminUrl = nil
+	return st, err
+}
+
+func (c tcpCore) Activate(ctx context.Context, name string, force bool) (api.Status, error) {
+	st, err := c.Core.Activate(ctx, name, force)
+	st.AdminUrl = nil
+	return st, err
+}
+
 // tcpStrict is the API as the TCP listener serves it: a switch is never forced there, as forcing
 // one may undo the token refresh Claude Code is about to make; admin is the listener's admin key.
 type tcpStrict struct {
@@ -484,7 +509,7 @@ func newHTTPApp(core Core, hub t3.Source, k httpKeys) *fiber.App {
 	app := fiber.New(fiber.Config{ErrorHandler: errorJSON, ReadTimeout: 10 * time.Second, IdleTimeout: time.Minute})
 	web.Register(app)
 	r := tcpRouter{app, k, map[string]bool{}}
-	api.RegisterHandlers(r, api.NewStrictHandler(tcpStrict{strict{core}, k.admin}, nil))
+	api.RegisterHandlers(r, api.NewStrictHandler(tcpStrict{strict{tcpCore{core}}, k.admin}, nil))
 	if len(r.seen) != len(tcpRoutes) {
 		panic("tcpRoutes names a route the API does not have")
 	}

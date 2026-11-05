@@ -243,6 +243,7 @@ type window struct {
 	key, label, short string
 	w                 *api.Window
 	limit             float64
+	none              bool // the plan has no such limit: a nil w is not missing data
 }
 
 func (m *Model) windows(a api.Account) []window {
@@ -255,8 +256,8 @@ func (m *Model) windows(a api.Account) []window {
 		week = 100
 	}
 	out := []window{
-		{i18n.T("tui.five_h"), i18n.T("tui.five_hours"), i18n.T("tui.five_hours"), a.FiveHour, five},
-		{i18n.T("tui.week_short"), i18n.T("tui.week"), i18n.T("tui.week"), a.SevenDay, week},
+		{i18n.T("tui.five_h"), i18n.T("tui.five_hours"), i18n.T("tui.five_hours"), a.FiveHour, five, a.NoFiveHourLimit},
+		{i18n.T("tui.week_short"), i18n.T("tui.week"), i18n.T("tui.week"), a.SevenDay, week, false},
 	}
 	for _, mw := range a.Models {
 		name := mw.Name
@@ -264,7 +265,7 @@ func (m *Model) windows(a api.Account) []window {
 			name = strings.ToUpper(name[:1]) + name[1:]
 		}
 		out = append(out, window{strings.ToLower(mw.Name), i18n.T("tui.model_week", name), i18n.T("tui.model_week_short", name),
-			&api.Window{Utilization: mw.Utilization, ResetsAt: mw.ResetsAt}, week})
+			&api.Window{Utilization: mw.Utilization, ResetsAt: mw.ResetsAt}, week, false})
 	}
 	return out
 }
@@ -471,6 +472,10 @@ func (m *Model) table(w int, narrow bool, now time.Time) []string {
 		}
 		segs := []seg{bar, {" ", p.plain}, mark, {" ", p.plain}, {pad(clip(a.Name, nw), nw), name}, {lpad(strconv.Itoa(a.Priority), 6), p.dim}, {"   ", p.plain}}
 		for _, wd := range m.windows(a)[:2] {
+			if wd.none {
+				segs = append(segs, seg{pad(i18n.T("tui.no_limit"), bw+5), p.dim}, seg{"  ", p.plain})
+				continue
+			}
 			fill, pct := m.tone(wd, !a.Enabled || a.Error != nil || m.down)
 			segs = append(append(segs, m.bar(wd.w, bw, fill)...), seg{" ", p.plain}, seg{pctText(wd.w), pct}, seg{"  ", p.plain})
 		}
@@ -504,12 +509,15 @@ func (m *Model) detail(w int, narrow bool, a api.Account, now time.Time) []strin
 	lines := []row{{segs: []seg{{a.Email, p.dim}, {"   " + i18n.T("tui.priority") + " ", p.dim}, {strconv.Itoa(a.Priority), p.plain}}}}
 	th := m.st.Thresholds
 	five, week := strconv.FormatFloat(100-th.FiveHour, 'f', -1, 64)+"%", strconv.FormatFloat(100-th.SevenDay, 'f', -1, 64)+"%"
+	atLeft, whenLeft := i18n.T("tui.next_at_left", five, week), i18n.T("tui.next_when_left", five, week)
+	if a.NoFiveHourLimit {
+		atLeft, whenLeft = i18n.T("tui.next_at_week_left", week), i18n.T("tui.next_when_week_left", week)
+	}
 	switch next := m.next(); {
 	case a.Active && next != "" && narrow:
-		lines = append(lines, row{segs: []seg{{i18n.T("tui.next_label"), p.dim}, {next, p.bold}, {i18n.T("tui.next_at_left", five, week), p.dim}}})
+		lines = append(lines, row{segs: []seg{{i18n.T("tui.next_label"), p.dim}, {next, p.bold}, {atLeft, p.dim}}})
 	case a.Active && next != "":
-		lines = append(lines, row{segs: []seg{{i18n.T("tui.moves_to"), p.dim}, {next, p.bold},
-			{i18n.T("tui.next_when_left", five, week), p.dim}}})
+		lines = append(lines, row{segs: []seg{{i18n.T("tui.moves_to"), p.dim}, {next, p.bold}, {whenLeft, p.dim}}})
 	case a.Name == next && m.st.Active != "":
 		lines = append(lines, row{segs: []seg{{i18n.T("tui.moves_here_once"), p.dim}, {m.st.Active, p.bold}, {i18n.T("tui.runs_out"), p.dim}}})
 	}
@@ -535,6 +543,10 @@ func (m *Model) detail(w int, narrow bool, a api.Account, now time.Time) []strin
 		label := wd.label
 		if narrow {
 			label = wd.short
+		}
+		if wd.none {
+			lines = append(lines, row{segs: []seg{{pad(label, lw), p.dim}, {i18n.T("tui.no_limit_plan"), p.dim}}})
+			continue
 		}
 		segs := cat([]seg{{pad(label, lw), p.dim}}, m.bar(wd.w, bw, fill), []seg{{" ", p.plain}, {pctText(wd.w), pct}, {"   ", p.plain}})
 		switch {

@@ -240,7 +240,7 @@ const ordered = () => [...state.accounts].sort((a, b) => b.priority - a.priority
 function windows(a) {
   const th = state.status.thresholds;
   return [
-    { label: t('w.five'), short: t('w.fiveShort'), w: a.five_hour, limit: th.five_hour },
+    { label: t('w.five'), short: t('w.fiveShort'), w: a.five_hour, limit: th.five_hour, none: a.no_five_hour_limit },
     { label: t('w.week'), short: t('w.weekShort'), w: a.seven_day, limit: th.seven_day },
     ...a.models.map((m) => ({ label: t('w.model', upFirst(m.name)), short: upFirst(m.name), w: m, limit: th.seven_day })),
   ];
@@ -604,19 +604,20 @@ function renderDuty() {
   note.hidden = !text;
 }
 
-function gauge(el, { label, w, limit }) {
+function gauge(el, { label, w, limit, none }) {
   el.querySelector('.g-label').textContent = label;
   const bar = el.querySelector('.bar');
   el.style.setProperty('--t', `${Math.min(100, limit)}%`);
   el.querySelector('.g-tick span').textContent = t('g.leaves', pct(limit));
   el.classList.toggle('none', !w);
+  el.classList.toggle('no-limit', Boolean(none));
   el.classList.toggle('over', Boolean(w) && w.utilization >= limit);
   if (!w) {
-    el.querySelector('.n').textContent = '—';
+    el.querySelector('.n').textContent = none ? t('m.noLimit') : '—';
     el.style.setProperty('--u', '0%');
     bar.removeAttribute('aria-valuenow');
-    bar.setAttribute('aria-label', t('m.noDataLabel', label));
-    el.querySelector('.g-reset').textContent = t('m.noData');
+    bar.setAttribute('aria-label', t(none ? 'm.noLimitLabel' : 'm.noDataLabel', label));
+    el.querySelector('.g-reset').textContent = none ? '' : t('m.noData');
     return;
   }
   const u = Math.max(0, Math.min(100, w.utilization));
@@ -665,8 +666,9 @@ function renderNext() {
       if (leaves) hand.push(h('span', 'at', t('next.at', clock(leaves))));
       pace = a.exhausted ? t(nx ? 'next.leaving' : 'next.stuck', a.name)
         : leaves ? t('next.pace', a.name, clock(leaves)) : t('next.noPace', a.name);
-      rule = nx ? tNodes('next.rule', a.name, pct(th.five_hour), pct(th.seven_day), nx.name)
-        : tNodes('next.ruleNone', a.name, pct(th.five_hour), pct(th.seven_day));
+      const five = pct(th.five_hour), week = pct(th.seven_day);
+      if (a.no_five_hour_limit) rule = nx ? tNodes('next.ruleWeek', a.name, week, nx.name) : tNodes('next.ruleNoneWeek', a.name, week);
+      else rule = nx ? tNodes('next.rule', a.name, five, week, nx.name) : tNodes('next.ruleNone', a.name, five, week);
     }
   }
   $('n-hand').replaceChildren(...hand);
@@ -994,6 +996,9 @@ function usage(td, x) {
     bar.style.setProperty('--u', `${Math.max(0, Math.min(100, x.w.utilization))}%`);
     line.classList.toggle('over', x.w.utilization >= x.limit);
     line.append(h('span', 'pc', pct(x.w.utilization)), bar, h('span', 'rs', resetText(x.w, false)));
+  } else if (x.none) {
+    line.classList.add('no-limit');
+    line.append(h('span', 'rs', t('m.noLimit')));
   } else {
     line.classList.add('none');
     line.append(h('span', 'pc', '—'), bar, h('span', 'rs', t('m.noData')));
