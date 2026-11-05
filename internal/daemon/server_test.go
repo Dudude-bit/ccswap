@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -749,13 +750,47 @@ func TestChangesNeedALoopbackHost(t *testing.T) { // DNS rebinding: a foreign na
 	}
 }
 
+// adminURLCore names admin_url in every status it returns.
 type adminURLCore struct{ *fakeCore }
 
-func (c adminURLCore) Status(ctx context.Context) (api.Status, error) {
-	st, err := c.fakeCore.Status(ctx)
+func withAdminURL(st api.Status, err error) (api.Status, error) {
 	u := "https://ccswap.example.com"
 	st.AdminUrl = &u
 	return st, err
+}
+
+func (c adminURLCore) Status(ctx context.Context) (api.Status, error) {
+	return withAdminURL(c.fakeCore.Status(ctx))
+}
+
+func (c adminURLCore) Activate(ctx context.Context, name string, force bool) (api.Status, error) {
+	return withAdminURL(c.fakeCore.Activate(ctx, name, force))
+}
+
+// TestTCPCoreHidesAdminURLEverywhere: every Core method that returns a status, the ones to come too,
+// leaves admin_url out on the TCP listener.
+func TestTCPCoreHidesAdminURLEverywhere(t *testing.T) {
+	status := reflect.TypeFor[api.Status]()
+	core := reflect.TypeFor[Core]()
+	for i := range core.NumMethod() {
+		m := core.Method(i)
+		if m.Type.NumOut() == 0 || m.Type.Out(0) != status {
+			continue
+		}
+		call := func(c Core) api.Status {
+			args := []reflect.Value{reflect.ValueOf(context.Background())}
+			for j := 1; j < m.Type.NumIn(); j++ {
+				args = append(args, reflect.Zero(m.Type.In(j)))
+			}
+			return reflect.ValueOf(c).MethodByName(m.Name).Call(args)[0].Interface().(api.Status)
+		}
+		if call(adminURLCore{&fakeCore{}}).AdminUrl == nil {
+			t.Fatalf("adminURLCore must name admin_url in %s too", m.Name)
+		}
+		if call(tcpCore{adminURLCore{&fakeCore{}}}).AdminUrl != nil {
+			t.Errorf("%s over TCP names admin_url", m.Name)
+		}
+	}
 }
 
 func TestAdminURLStaysOnTheSocket(t *testing.T) { // where changes are taken is not for every key holder

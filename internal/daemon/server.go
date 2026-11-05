@@ -468,6 +468,12 @@ func (c tcpCore) Status(ctx context.Context) (api.Status, error) {
 	return st, err
 }
 
+func (c tcpCore) Activate(ctx context.Context, name string, force bool) (api.Status, error) {
+	st, err := c.Core.Activate(ctx, name, force)
+	st.AdminUrl = nil
+	return st, err
+}
+
 // tcpStrict is the API as the TCP listener serves it: a switch is never forced there, as forcing
 // one may undo the token refresh Claude Code is about to make; admin is the listener's admin key.
 type tcpStrict struct {
