@@ -90,7 +90,9 @@ ccswap adopt work
   `GET https://api.github.com/repos/Dudude-bit/ccswap/releases/latest` через минуту после запуска и
   дальше каждые 12 часов, с user agent `ccswap/<версия>` и больше ничем; `[update] check = false` в
   `config.toml` это выключает. `ccswap update` и кнопка «Обновить» на странице тоже спрашивают его, а
-  потом скачивают с github.com архив релиза и `checksums.txt`.
+  потом скачивают с github.com архив релиза и `checksums.txt`. GitHub разрешает 60 таких запросов в час
+  с одного адреса; если в `GH_TOKEN` или `GITHUB_TOKEN` лежит токен GitHub, ccswap отправляет его с этим
+  запросом и только с ним, но не со скачиваниями.
 - **Токены остаются на этой машине.** Входы неактивных аккаунтов лежат в связке ключей macOS (service
   `ccswap`) или, на Linux, в файлах 0600 в папке ccswap. Кроме запросов к Anthropic из таблицы выше,
   машину они покидают, только когда вы переносите аккаунт командой `ccswap migrate`, в зашифрованном

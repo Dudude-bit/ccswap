@@ -84,7 +84,9 @@ ccswap adopt work
   `GET https://api.github.com/repos/Dudude-bit/ccswap/releases/latest` for the newest release a minute
   after it starts and then every 12 hours, with the user agent `ccswap/<version>` and nothing else;
   `[update] check = false` in `config.toml` turns that off. `ccswap update` and the page's Update button ask it too, then
-  download the release's archive and `checksums.txt` from github.com.
+  download the release's archive and `checksums.txt` from github.com. GitHub allows 60 such asks an hour
+  from one address; with a GitHub token in `GH_TOKEN` or `GITHUB_TOKEN`, ccswap sends that token with the
+  ask, and only with it, never with the downloads.
 - **Tokens stay on this machine.** The logins of inactive accounts live in the macOS keychain (service
   `ccswap`) or, on Linux, in 0600 files in ccswap's folder. Apart from the requests to Anthropic above,
   they leave the machine only when you move an account with `ccswap migrate`, in an encrypted bundle.

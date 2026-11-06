@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,13 +58,17 @@ func Latest(ctx context.Context, userAgent string) (Release, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", userAgent)
+	env, tok := token()
+	if tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return Release{}, i18n.Err("update.no_answer", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return Release{}, i18n.Err("update.github_status", resp.StatusCode)
+		return Release{}, statusErr(resp, env, time.Now())
 	}
 	var r struct {
 		Tag    string `json:"tag_name"`
@@ -83,6 +88,48 @@ func Latest(ctx context.Context, userAgent string) (Release, error) {
 		rel.assets[a.Name] = a.URL
 	}
 	return rel, nil
+}
+
+// token is a GitHub token from the environment, read as gh reads one, and the variable that holds it. Only
+// the API gets it, never the download host.
+func token() (env, tok string) {
+	for _, env := range []string{"GH_TOKEN", "GITHUB_TOKEN"} {
+		if tok := os.Getenv(env); tok != "" {
+			return env, tok
+		}
+	}
+	return "", ""
+}
+
+// statusErr says why GitHub did not answer 200; env names the token variable sent, if any.
+func statusErr(resp *http.Response, env string, now time.Time) error {
+	code := resp.StatusCode
+	if code == http.StatusUnauthorized && env != "" {
+		return i18n.Err("update.bad_token", env)
+	}
+	if code == http.StatusForbidden || code == http.StatusTooManyRequests {
+		if wait, ok := limited(resp.Header, now); ok {
+			mins := max(1, int((wait+time.Minute-1)/time.Minute))
+			if env != "" {
+				return i18n.Err("update.rate_limited_token", env, mins)
+			}
+			return i18n.Err("update.rate_limited", mins)
+		}
+	}
+	return i18n.Err("update.github_status", code)
+}
+
+// limited is how long GitHub's rate limit holds, from its answer's headers; false when it is no limit.
+func limited(h http.Header, now time.Time) (time.Duration, bool) {
+	if s, err := strconv.Atoi(h.Get("Retry-After")); err == nil {
+		return time.Duration(s) * time.Second, true
+	}
+	if h.Get("X-RateLimit-Remaining") == "0" {
+		if reset, err := strconv.ParseInt(h.Get("X-RateLimit-Reset"), 10, 64); err == nil {
+			return time.Unix(reset, 0).Sub(now), true
+		}
+	}
+	return 0, false
 }
 
 // archive is the name goreleaser gives rel's build for this platform.
@@ -142,7 +189,7 @@ func get(ctx context.Context, url string, limit int64) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, i18n.Err("update.github_status", resp.StatusCode)
+		return nil, statusErr(resp, "", time.Now())
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
