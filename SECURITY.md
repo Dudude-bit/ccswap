@@ -88,6 +88,8 @@ GitHub, over HTTPS:
   only then replaces the old one in one rename. A failed update leaves the old binary and the running
   daemon as they were.
 - Only a newer release is installed: never an older one, a draft or a prerelease.
+- A GitHub token in `GH_TOKEN` or `GITHUB_TOKEN` goes only to `api.github.com`, with the ask for the
+  newest release, never to the host the archive downloads from.
 - An update never copies the environment of the shell it runs in into the service: the daemon restarts in
   its own process, and its service and the hook stay as installed. `ccswap update` restarts only a daemon
   that runs the binary it replaced.

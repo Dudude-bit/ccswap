@@ -9,14 +9,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Dudude-bit/ccswap/internal/i18n"
 )
@@ -62,6 +65,7 @@ type release struct {
 	corrupt   bool
 	noBuild   bool
 	asks      int
+	auth      map[string]string // the Authorization each path got
 }
 
 func (r *release) serve(t *testing.T) {
@@ -87,8 +91,12 @@ func (r *release) serve(t *testing.T) {
 		sum[0] ^= 1
 	}
 	sums := hex.EncodeToString(sum[:]) + "  " + name + "\n" + strings.Repeat("0", 64) + "  ccswap_other.tar.gz\n"
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	r.auth = map[string]string{}
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.auth[req.URL.Path] = req.Header.Get("Authorization")
 		switch req.URL.Path {
 		case "/repos/Dudude-bit/ccswap/releases/latest":
 			r.asks++
@@ -175,6 +183,63 @@ func TestInstallRefusals(t *testing.T) {
 			}
 			if left, _ := filepath.Glob(filepath.Join(filepath.Dir(bin), ".ccswap-update-*")); len(left) != 0 {
 				t.Fatalf("temp files left: %v", left)
+			}
+		})
+	}
+}
+
+func TestTokenGoesOnlyToTheAPI(t *testing.T) {
+	r := &release{tag: "v9.9.9", says: "v9.9.9"}
+	r.serve(t)
+	t.Setenv("GITHUB_TOKEN", "ghs_other")
+	t.Setenv("GH_TOKEN", "ghs_test") // first, as gh reads them
+	rel, err := Latest(context.Background(), "ccswap/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, _ := installed(t)
+	if err := Install(context.Background(), rel, bin); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"/repos/Dudude-bit/ccswap/releases/latest": "Bearer ghs_test", "/sums": "", "/tgz": ""}
+	if !maps.Equal(r.auth, want) {
+		t.Fatalf("%v", r.auth)
+	}
+}
+
+func TestLatestSaysWhyGitHubRefused(t *testing.T) {
+	reset := strconv.FormatInt(time.Now().Add(90*time.Second).Unix(), 10)
+	for _, c := range []struct {
+		name, token string
+		code        int
+		header      map[string]string
+		want        *i18n.Error
+	}{
+		{"limit", "", 403, map[string]string{"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": reset}, i18n.Err("update.rate_limited", 2)},
+		{"limit past its reset", "", 403, map[string]string{"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1"}, i18n.Err("update.rate_limited", 1)},
+		{"retry after", "", 429, map[string]string{"Retry-After": "60"}, i18n.Err("update.rate_limited", 1)},
+		{"token limit", "ghs_test", 403, map[string]string{"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": reset}, i18n.Err("update.rate_limited_token", "GITHUB_TOKEN", 2)},
+		{"bad token", "ghs_test", 401, nil, i18n.Err("update.bad_token", "GITHUB_TOKEN")},
+		{"401 without a token", "", 401, nil, i18n.Err("update.github_status", 401)},
+		{"403 with requests left", "", 403, map[string]string{"X-RateLimit-Remaining": "12", "X-RateLimit-Reset": reset}, i18n.Err("update.github_status", 403)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("GH_TOKEN", "")
+			t.Setenv("GITHUB_TOKEN", c.token)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				for k, v := range c.header {
+					w.Header().Set(k, v)
+				}
+				w.WriteHeader(c.code)
+			}))
+			t.Cleanup(srv.Close)
+			old := API
+			API = srv.URL
+			t.Cleanup(func() { API = old })
+			_, err := Latest(context.Background(), "ccswap/test")
+			var ie *i18n.Error
+			if !errors.As(err, &ie) || ie.In(i18n.EN) != c.want.In(i18n.EN) {
+				t.Fatalf("got %v, want %v", err, c.want.In(i18n.EN))
 			}
 		})
 	}
