@@ -114,8 +114,14 @@ func catchUp(cmd *cobra.Command, version string) error {
 	}
 	ctx, cancel := within(cmd, readTimeout)
 	defer cancel()
-	if st, err := cl.GetStatusWithResponse(ctx); err != nil || st.JSON200 == nil || !update.Newer(version, st.JSON200.Version) {
-		return nil // no daemon, or one on this release
+	st, err := cl.GetStatusWithResponse(ctx)
+	switch {
+	case errors.Is(down(err), errDown):
+		return nil // no daemon
+	case err != nil:
+		return down(err)
+	case st.JSON200 == nil || !update.Newer(version, st.JSON200.Version):
+		return nil // a daemon on this release, or on no release
 	}
 	bin, err := updateTarget()
 	if err != nil {
@@ -129,9 +135,15 @@ func updateOther(cmd *cobra.Command, cl *api.ClientWithResponses, bin, version s
 	ctx, cancel := within(cmd, readTimeout)
 	st, err := cl.GetStatusWithResponse(ctx)
 	cancel()
-	if err == nil && st.JSON200 != nil && update.Known(st.JSON200.Version) && !update.Newer(version, st.JSON200.Version) {
-		fmt.Fprintf(cmd.OutOrStdout(), i18n.T("update.other_daemon_current"), bin, st.JSON200.Version)
-		return nil
+	if err == nil && st.JSON200 != nil {
+		switch v := st.JSON200.Version; {
+		case !update.Known(v): // it cannot compare itself with a release: ccswap update cannot update it
+			fmt.Fprintf(cmd.OutOrStdout(), i18n.T("update.other_daemon_unversioned"), bin, v)
+			return nil
+		case !update.Newer(version, v):
+			fmt.Fprintf(cmd.OutOrStdout(), i18n.T("update.other_daemon_current"), bin, v)
+			return nil
+		}
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), i18n.T("update.other_daemon"), bin)
 	ctx, cancel = within(cmd, installTimeout)

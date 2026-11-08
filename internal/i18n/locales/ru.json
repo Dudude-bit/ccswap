@@ -486,6 +486,7 @@
   "update.other_daemon": "Демон работает на %s, а не на этом ccswap: он ставит релиз поверх него и перезапускается…\n",
   "update.other_daemon_current": "Демон работает на %s, и это уже %s\n",
   "update.other_daemon_failed": "демон работает на %[1]s, а не на этом ccswap, и не обновил его (%[2]v): выполните %[1]s update",
+  "update.other_daemon_unversioned": "Демон работает на %s, а он собран не из релиза (%s): обновите его так же, как собирали\n",
   "update.rate_limited": "GitHub ограничил запросы с этого адреса ещё на %d мин: повторите позже или задайте токен GitHub в GH_TOKEN или GITHUB_TOKEN: у токена лимит намного выше",
   "update.rate_limited_token": "GitHub ограничил запросы токена из %s ещё на %d мин: повторите позже",
   "update.restart_daemon": "Демон всё ещё работает на старом ccswap: перезапустите его, чтобы запустить %s\n",

@@ -179,6 +179,20 @@ func TestUpdateAnotherDaemonOnTheRelease(t *testing.T) {
 	}
 }
 
+// TestUpdateAnotherDaemonWithoutAVersion: a daemon on another binary built without a version is not asked to
+// update; ccswap update says to update it the way it was built.
+func TestUpdateAnotherDaemonWithoutAVersion(t *testing.T) {
+	g := &github{latest: "v0.2.0"}
+	g.seam(t)
+	f := &fake{bin: "/usr/local/bin/ccswap", version: "dev", selfErr: daemon.ErrNoUpdate}
+	env(t, f)
+	out, err := runAs(t, "v0.1.0", "update")
+	if err != nil || !strings.HasSuffix(out, i18n.T("update.other_daemon_unversioned", "/usr/local/bin/ccswap", "dev")) ||
+		strings.Contains(f.migrateCalls(), "update") {
+		t.Fatalf("%v %q, daemon asked %q", err, out, f.migrateCalls())
+	}
+}
+
 // TestUpdateCatchesUpAnotherDaemon: this ccswap is on the newest release already, as a ccswap update from
 // before it left things, and a daemon on another binary still runs an older one: it gets the release.
 func TestUpdateCatchesUpAnotherDaemon(t *testing.T) {
