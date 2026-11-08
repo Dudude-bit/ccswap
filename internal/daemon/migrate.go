@@ -103,7 +103,7 @@ func (d *Daemon) MigrateExport(_ context.Context, names []string) (api.MigrateEx
 				return err
 			}
 			accts = append(accts, migrate.Account{Name: a.Name, Email: a.Email, Priority: a.Priority, Enabled: a.Enabled,
-				OAuthAccount: a.OAuthAccount, Credentials: b})
+				OAuthAccount: a.OAuthAccount, Credentials: b, WeeklyThreshold: a.WeeklyThreshold})
 			rts[n] = rtHash(c.OAuth.RefreshToken)
 		}
 		bundle, code, err := migrate.Seal(accts)
@@ -531,7 +531,8 @@ func (d *Daemon) addLocked(accts []migrate.Account, logins []claudecode.Credenti
 		x.Accounts = slices.DeleteFunc(x.Accounts, func(a store.Account) bool { return slices.Contains(replaced, a.Name) })
 		for _, a := range accts {
 			x.Accounts = append(x.Accounts, store.Account{Name: a.Name, Email: a.Email, Priority: a.Priority,
-				Enabled: a.Enabled, OAuthAccount: a.OAuthAccount, AuthIndex: store.AuthIndex(a.Name)})
+				Enabled: a.Enabled, OAuthAccount: a.OAuthAccount, AuthIndex: store.AuthIndex(a.Name),
+				WeeklyThreshold: a.WeeklyThreshold})
 		}
 		return nil
 	})

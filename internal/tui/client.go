@@ -22,6 +22,7 @@ type Client interface {
 	SetPriority(ctx context.Context, name string, priority int) error
 	SetEnabled(ctx context.Context, name string, on bool) error
 	SetStrategy(ctx context.Context, s api.Strategy) error
+	SetWeekly(ctx context.Context, name string, v float64) error // 0: the global weekly threshold
 	RefreshLogin(ctx context.Context, name string) error
 }
 
@@ -206,6 +207,10 @@ func (a adapter) SetPriority(ctx context.Context, name string, priority int) err
 
 func (a adapter) SetEnabled(ctx context.Context, name string, on bool) error {
 	return a.patch(ctx, name, api.AccountPatch{Enabled: &on})
+}
+
+func (a adapter) SetWeekly(ctx context.Context, name string, v float64) error {
+	return a.patch(ctx, name, api.AccountPatch{WeeklyThreshold: &v})
 }
 
 func (a adapter) SetStrategy(ctx context.Context, s api.Strategy) error {

@@ -52,6 +52,8 @@ type Account struct {
 	Enabled      bool            `json:"enabled"`
 	OAuthAccount json.RawMessage `json:"oauth_account,omitempty"`
 	Credentials  json.RawMessage `json:"credentials"`
+	// WeeklyThreshold is the account's own weekly threshold; 0, or absent from an older bundle, follows the global one
+	WeeklyThreshold float64 `json:"weekly_threshold,omitempty"`
 }
 
 type payload struct {

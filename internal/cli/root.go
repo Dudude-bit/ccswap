@@ -52,7 +52,7 @@ func NewRoot(version string) *cobra.Command {
 	}
 	root.AddCommand(
 		newLoginCmd(), newAdoptCmd(), newRemoveCmd(), newUseCmd(), newListCmd(), newStatusCmd(),
-		newPriorityCmd(), newEnableCmd(true), newEnableCmd(false), newAutoCmd(), newStrategyCmd(), newMigrateCmd(),
+		newPriorityCmd(), newWeeklyCmd(), newEnableCmd(true), newEnableCmd(false), newAutoCmd(), newStrategyCmd(), newMigrateCmd(),
 		newT3Cmd(), newWebCmd(), newRemoteCmd(), newLangCmd(), newSignalCmd(), newDaemonCmd(), newDoctorCmd(), newTUICmd(),
 		newUpdateCmd(),
 	)

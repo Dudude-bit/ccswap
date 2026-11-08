@@ -147,6 +147,12 @@ func usageAt(h5 float64, reset time.Time) resp {
 		h5, reset.Format(time.RFC3339), t0.Add(72*time.Hour).Format(time.RFC3339))}
 }
 
+// usageWeek is usage at h5 of the 5-hour window, resetting in 2 hours, and at week of the weekly one.
+func usageWeek(h5, week float64) resp {
+	return resp{200, fmt.Sprintf(`{"five_hour":{"utilization":%v,"resets_at":%q},"seven_day":{"utilization":%v,"resets_at":%q}}`,
+		h5, t0.Add(2*time.Hour).Format(time.RFC3339), week, t0.Add(72*time.Hour).Format(time.RFC3339))}
+}
+
 // usageWeekAt is usage whose weekly window resets at reset; cache-aware orders by it.
 func usageWeekAt(h5 float64, reset time.Time) resp {
 	return resp{200, fmt.Sprintf(`{"five_hour":{"utilization":%v,"resets_at":%q},"seven_day":{"utilization":10,"resets_at":%q}}`,
@@ -1727,6 +1733,65 @@ func TestSetThresholdsSavesAndApplies(t *testing.T) {
 		CheckActive: 5 * time.Minute, CheckOthers: 30 * time.Minute}) {
 		t.Fatal("config.toml", c.Thresholds, err)
 	}
+}
+
+func TestOwnWeeklyThreshold(t *testing.T) {
+	e := newTenv(t)
+	ctx := context.Background()
+	own := func(v float64) api.AccountPatch { return api.AccountPatch{WeeklyThreshold: &v} }
+	e.api.set(func(f *fakeAnthropic) { f.usage["atA"] = usageWeek(10, 86) })
+	e.poll()
+	if v := e.view("a"); v.Exhausted || v.WeeklyThreshold != nil {
+		t.Fatalf("86%% of the week is under the global 98%%: %+v", v)
+	}
+	a, err := e.d.Patch(ctx, "a", own(85))
+	if err != nil || a.WeeklyThreshold == nil || *a.WeeklyThreshold != 85 || !a.Exhausted || *a.ExhaustedReason != "seven_day" {
+		t.Fatal(a, err)
+	}
+	if s, _ := e.st.State().Find("a"); s.WeeklyThreshold != 85 {
+		t.Fatal("not saved", s)
+	}
+	if a, err := e.d.Patch(ctx, "a", own(0)); err != nil || a.WeeklyThreshold != nil || a.Exhausted {
+		t.Fatal("0 must follow the global threshold again", a, err)
+	}
+	for _, v := range []float64{10, 5, -1, 100.5, math.NaN()} {
+		if _, err := e.d.Patch(ctx, "a", own(v)); !errors.Is(err, ErrInvalidThresholds) {
+			t.Errorf("%v: %v", v, err)
+		}
+	}
+	if _, err := e.d.Patch(ctx, "a", own(100)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.d.SetThresholds(ctx, api.Thresholds{FiveHour: 95, SevenDay: 98, Hysteresis: 50,
+		CheckActiveSeconds: 300, CheckOthersSeconds: 1800}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.d.Patch(ctx, "a", own(50)); !errors.Is(err, ErrInvalidThresholds) {
+		t.Fatal("an own threshold at the hysteresis leaves no room to come back", err)
+	}
+	if _, err := e.d.Patch(ctx, "b", own(60)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.d.SetThresholds(ctx, api.Thresholds{FiveHour: 95, SevenDay: 98, Hysteresis: 60,
+		CheckActiveSeconds: 300, CheckOthersSeconds: 1800}); !errors.Is(err, ErrInvalidThresholds) {
+		t.Fatal("hysteresis at b's own threshold", err)
+	}
+}
+
+func TestOwnWeeklyThresholdNowhereToGo(t *testing.T) {
+	e := newTenv(t)
+	ctx := context.Background()
+	v := 85.0
+	if _, err := e.d.Patch(ctx, "a", api.AccountPatch{WeeklyThreshold: &v}); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	if _, err := e.d.Patch(ctx, "b", api.AccountPatch{Enabled: &off}); err != nil {
+		t.Fatal(err)
+	}
+	e.api.set(func(f *fakeAnthropic) { f.usage["atA"] = usageWeek(10, 86) })
+	e.poll()
+	e.msgs(note("daemon.own_weekly_no_other", "a"))
 }
 
 func TestSetThresholdsRejectsInvalid(t *testing.T) {

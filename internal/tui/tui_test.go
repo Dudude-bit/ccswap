@@ -50,6 +50,7 @@ type fake struct {
 	strategy api.Strategy
 	editErr  error
 	tokens   []string
+	weekly   map[string]float64
 }
 
 func (f *fake) Status(context.Context) (api.Status, error) { return f.st, f.statErr }
@@ -82,6 +83,13 @@ func (f *fake) SetEnabled(_ context.Context, name string, on bool) error {
 	return f.editErr
 }
 func (f *fake) SetStrategy(_ context.Context, s api.Strategy) error { f.strategy = s; return f.editErr }
+func (f *fake) SetWeekly(_ context.Context, name string, v float64) error {
+	if f.weekly == nil {
+		f.weekly = map[string]float64{}
+	}
+	f.weekly[name] = v
+	return f.editErr
+}
 func (f *fake) RefreshLogin(_ context.Context, name string) error {
 	f.tokens = append(f.tokens, name)
 	return f.editErr
@@ -425,6 +433,58 @@ func TestToggleAuto(t *testing.T) {
 	run(t, m, cmd)
 	if len(f.autos) != 1 || f.autos[0] != false {
 		t.Fatalf("autos = %v", f.autos)
+	}
+}
+
+func typed(m tea.Model, s string) tea.Model {
+	for _, r := range s {
+		m, _ = send(m, key(string(r)))
+	}
+	return m
+}
+
+func erased(m tea.Model, n int) tea.Model {
+	for range n {
+		m, _ = send(m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	}
+	return m
+}
+
+func TestWeeklyKeySetsTheOwnThreshold(t *testing.T) {
+	f := fixture()
+	m := loaded(t, f)
+	m, _ = send(m, key("w"))
+	if !strings.Contains(text(m), i18n.T("tui.weekly_prompt", "work")) {
+		t.Fatalf("no prompt:\n%s", text(m))
+	}
+	m, cmd := send(typed(m, "lots"), key("enter"))
+	if cmd != nil || f.weekly != nil || !strings.Contains(text(m), i18n.T("weekly.not_number", "lots")) {
+		t.Fatalf("a word must not be sent: %v\n%s", f.weekly, text(m))
+	}
+	m, cmd = send(typed(erased(m, 4), "85"), key("enter"))
+	if own := m.(*Model).accts[0].WeeklyThreshold; own == nil || *own != 85 || !strings.Contains(text(m), i18n.T("weekly.leaves_at", 85.0)) {
+		t.Fatalf("85%% must show before the daemon answers:\n%s", text(m))
+	}
+	m = run(t, m, cmd)
+	if f.weekly["work"] != 85 || !strings.Contains(text(m), i18n.T("tui.weekly_set", "work", 85.0)) {
+		t.Fatalf("weekly %v\n%s", f.weekly, text(m))
+	}
+	m, _ = send(m, key("w"))
+	if v := m.(*Model).input.Value(); v != "85" {
+		t.Fatalf("the prompt must start from the account's own threshold: %q", v)
+	}
+	m, cmd = send(erased(m, 2), key("enter"))
+	if m.(*Model).accts[0].WeeklyThreshold != nil {
+		t.Fatal("an empty threshold must follow the global one at once")
+	}
+	m = run(t, m, cmd)
+	if v, ok := f.weekly["work"]; !ok || v != 0 || !strings.Contains(text(m), i18n.T("tui.weekly_global", "work")) {
+		t.Fatalf("weekly %v\n%s", f.weekly, text(m))
+	}
+	m, _ = send(m, key("w"))
+	m, _ = send(m, key("esc"))
+	if m.(*Model).mode != modeList {
+		t.Fatal("esc must close the prompt")
 	}
 }
 

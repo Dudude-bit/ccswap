@@ -59,6 +59,10 @@ func jsonEqual(t *testing.T, a, b []byte) bool {
 func TestExportPacksAndFreezes(t *testing.T) {
 	e := newTenv(t)
 	ctx := context.Background()
+	own := 85.0
+	if _, err := e.d.Patch(ctx, "b", api.AccountPatch{WeeklyThreshold: &own}); err != nil {
+		t.Fatal(err)
+	}
 	x, err := e.d.MigrateExport(ctx, []string{"b", "b"})
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +75,7 @@ func TestExportPacksAndFreezes(t *testing.T) {
 		t.Fatal(accts, err)
 	}
 	vault, _ := e.kc.Get(store.VaultService, "b")
-	if a := accts[0]; a.Name != "b" || a.Email != "b@x" || a.Priority != 10 || !a.Enabled ||
+	if a := accts[0]; a.Name != "b" || a.Email != "b@x" || a.Priority != 10 || !a.Enabled || a.WeeklyThreshold != 85 ||
 		!jsonEqual(t, a.Credentials, vault) || !jsonEqual(t, a.OAuthAccount, []byte(`{"emailAddress":"b@x"}`)) {
 		t.Fatalf("%+v", a)
 	}
@@ -491,13 +495,15 @@ func TestImportAddsAndRefreshes(t *testing.T) {
 	e.api.set(func(f *fakeAnthropic) {
 		f.refresh["rC"] = resp{200, `{"access_token":"atC2","refresh_token":"rC2","expires_in":28800}`}
 	})
-	bundle, code := seal(t, macct("c", "c@x", "rC", 7))
+	c := macct("c", "c@x", "rC", 7)
+	c.WeeklyThreshold = 85
+	bundle, code := seal(t, c)
 	x, err := e.migrateImport(bundle, code, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	a := e.account("c")
-	if a.Email != "c@x" || a.Priority != 7 || !a.Enabled || a.NeedsLogin || a.AuthIndex != store.AuthIndex("c") ||
+	if a.Email != "c@x" || a.Priority != 7 || !a.Enabled || a.NeedsLogin || a.AuthIndex != store.AuthIndex("c") || a.WeeklyThreshold != 85 ||
 		!jsonEqual(t, a.OAuthAccount, []byte(`{"emailAddress":"c@x"}`)) {
 		t.Fatalf("%+v", a)
 	}

@@ -275,6 +275,14 @@ func (t Thresholds) Check() error {
 	return nil
 }
 
+// WithWeekly is t with an account's own weekly threshold in place of Weekly, when it has one (above 0).
+func (t Thresholds) WithWeekly(own float64) Thresholds {
+	if own > 0 {
+		t.Weekly = own
+	}
+	return t
+}
+
 // SaveThresholds rewrites the [thresholds] table of config.toml.
 func SaveThresholds(home string, t Thresholds) error {
 	return saveTable(home, "thresholds", map[string]any{

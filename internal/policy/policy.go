@@ -3,6 +3,7 @@ package policy
 
 import (
 	"math"
+	"slices"
 	"time"
 
 	"github.com/Dudude-bit/ccswap/internal/anthropic"
@@ -53,6 +54,8 @@ type AccountState struct {
 	LimitHitUntil time.Time
 	CheckedAt     time.Time
 	FreshFor      time.Duration // how old CheckedAt may be for the data to count, at least StaleAfter
+	// WeeklyThreshold replaces th.Weekly for this account when above 0; the room above it is kept
+	WeeklyThreshold float64
 }
 
 type Decision struct {
@@ -67,6 +70,7 @@ type limited struct {
 
 // counting returns the windows that still matter at now, with their thresholds.
 func counting(a AccountState, th config.Thresholds, now time.Time) []limited {
+	th = th.WithWeekly(a.WeeklyThreshold)
 	var out []limited
 	add := func(w *anthropic.Window, t float64) {
 		if w != nil && (w.ResetsAt.IsZero() || w.ResetsAt.After(now)) {
@@ -87,17 +91,15 @@ func Exhausted(a AccountState, th config.Thresholds, now time.Time) bool {
 
 // ExhaustedBy names what blocks a: "five_hour", "seven_day", "model:<name>" or "limit_hit"; "" when nothing does.
 func ExhaustedBy(a AccountState, th config.Thresholds, now time.Time) string {
-	at := func(w *anthropic.Window, t float64) bool {
-		return w != nil && (w.ResetsAt.IsZero() || w.ResetsAt.After(now)) && w.Utilization >= t
-	}
+	th = th.WithWeekly(a.WeeklyThreshold)
 	switch {
-	case at(a.FiveHour, th.FiveHour):
+	case reached(a.FiveHour, th.FiveHour, now):
 		return "five_hour"
-	case at(a.SevenDay, th.Weekly):
+	case reached(a.SevenDay, th.Weekly, now):
 		return "seven_day"
 	}
 	for _, m := range a.Models {
-		if at(&m.Window, th.Weekly) {
+		if reached(&m.Window, th.Weekly, now) {
 			return "model:" + m.Name
 		}
 	}
@@ -105,6 +107,21 @@ func ExhaustedBy(a AccountState, th config.Thresholds, now time.Time) string {
 		return "limit_hit"
 	}
 	return ""
+}
+
+func reached(w *anthropic.Window, t float64, now time.Time) bool {
+	return w != nil && (w.ResetsAt.IsZero() || w.ResetsAt.After(now)) && w.Utilization >= t
+}
+
+// Keeps reports whether a is past its own weekly threshold with room left above it: the room is its
+// owner's, and an account waited on is still spent, so auto-switch never waits there.
+func Keeps(a AccountState, now time.Time) bool {
+	t := a.WeeklyThreshold
+	if t <= 0 || t >= 100 {
+		return false
+	}
+	return reached(a.SevenDay, t, now) ||
+		slices.ContainsFunc(a.Models, func(m anthropic.ModelWindow) bool { return reached(&m.Window, t, now) })
 }
 
 // Fresh reports whether a's usage still counts: no older than FreshFor, and never less than StaleAfter.
@@ -276,12 +293,12 @@ func Next(now time.Time, accts []AccountState, active string, th config.Threshol
 
 // FirstFree is the account that frees up first, the one auto-switch moves to or stays on when every account
 // is at its limit: active unless another, fresh and logged in, frees up sooner (the higher priority on a tie);
-// "" when no time is known.
+// never one past its own weekly threshold; "" when no time is known.
 func FirstFree(now time.Time, accts []AccountState, active string, th config.Thresholds) string {
 	var own, pickAt time.Time // zero: never, as with an unknown reset
 	var pick AccountState
 	for _, a := range accts {
-		if !a.Enabled || a.NeedsLogin {
+		if !a.Enabled || a.NeedsLogin || Keeps(a, now) {
 			continue
 		}
 		at, ok := FreeAt(a, th, now)

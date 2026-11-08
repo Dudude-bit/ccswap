@@ -418,7 +418,7 @@ components:
       properties:
         five_hour: {type: number, format: double}
         seven_day: {type: number, format: double}
-        hysteresis: {type: number, format: double}
+        hysteresis: {type: number, format: double, description: "Points under a threshold an account drops to before auto-switch returns to it; under five_hour, seven_day and every account's own weekly_threshold"}
         min_dwell_seconds: {type: integer}
         check_active_seconds: {type: integer, description: How often Anthropic is asked for the usage of the account in use}
         check_others_seconds: {type: integer, description: How often it is asked for every other account's}
@@ -433,7 +433,7 @@ components:
         strategy: {$ref: "#/components/schemas/Strategy"}
         last_activity_at: {type: string, format: date-time, description: Newest Claude Code transcript write; absent when unknown}
         next: {type: string, description: Account auto-switch moves to once the active one runs out; absent when auto is off or none is usable}
-        first_free: {type: string, description: "When every account is at its limit: the one that frees up first, which auto-switch moves to or stays on (its free_at says when); absent otherwise or when no time is known"}
+        first_free: {type: string, description: "When every account is at its limit: the one that frees up first, which auto-switch moves to or stays on (its free_at says when), never one past its own weekly_threshold; absent otherwise or when no time is known"}
         remote: {$ref: "#/components/schemas/Remote"}
         unknown_active: {type: boolean}
         target_service: {type: string}
@@ -528,6 +528,13 @@ components:
         five_hour: {$ref: "#/components/schemas/Window"}
         seven_day: {$ref: "#/components/schemas/Window"}
         no_five_hour_limit: {type: boolean, description: "Anthropic's last answer has a weekly window and a null five-hour one: this plan has no such limit, as a verified Ultra has none. False before the first answer, or with a five_hour missing or unreadable, which say nothing of the plan"}
+        weekly_threshold:
+          type: number
+          format: double
+          description: >-
+            The account's own weekly threshold, in place of thresholds.seven_day: auto-switch leaves it at this % of its
+            weekly and per-model weekly windows, and past it never waits on it when every account is at its limit, so the
+            room above stays its owner's. Absent when it follows thresholds.seven_day.
         models:
           type: array
           items: {$ref: "#/components/schemas/ModelWindow"}
@@ -549,6 +556,7 @@ components:
       properties:
         priority: {type: integer}
         enabled: {type: boolean}
+        weekly_threshold: {type: number, format: double, description: "The account's own weekly threshold, above thresholds.hysteresis and at most 100 (else 400 invalid_thresholds); 0 follows thresholds.seven_day again"}
     Strategy:
       type: string
       enum: [fill-first, cache-aware]

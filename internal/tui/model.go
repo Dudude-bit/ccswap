@@ -4,8 +4,11 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"math"
 	"os/exec"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/textinput"
@@ -29,6 +32,7 @@ const (
 	modeList mode = iota
 	modeConfirm
 	modeName
+	modeWeekly
 )
 
 type (
@@ -66,7 +70,7 @@ type Model struct {
 
 	sel     string // selected account name; survives refreshes
 	mode    mode
-	pending string // account awaiting the near_refresh confirmation
+	pending string // account awaiting the near_refresh confirmation, or its weekly threshold
 	input   textinput.Model
 	hint    string // validation hint under the name prompt
 
@@ -275,6 +279,19 @@ func (m *Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.input, cmd = m.input.Update(k)
 		m.hint = ""
 		return m, cmd
+	case modeWeekly:
+		switch s {
+		case "esc":
+			m.mode, m.pending, m.hint = modeList, "", ""
+			m.input.Blur()
+			return m, nil
+		case "enter":
+			return m.setWeekly()
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(k)
+		m.hint = ""
+		return m, cmd
 	}
 	if m.help && (s == "?" || s == "esc") {
 		m.help = false
@@ -344,6 +361,50 @@ func (m *Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.mode, m.hint = modeName, ""
 		m.input.Reset()
 		return m, m.input.Focus()
+	case "w":
+		if !ok {
+			return m, nil
+		}
+		m.mode, m.pending, m.hint = modeWeekly, a.Name, ""
+		m.input.Reset()
+		if a.WeeklyThreshold != nil {
+			m.input.SetValue(strconv.FormatFloat(*a.WeeklyThreshold, 'f', -1, 64))
+		}
+		return m, m.input.Focus()
 	}
 	return m, nil
+}
+
+// ParseWeekly reads an own weekly threshold as typed, "85" or "85%"; empty or "default" is 0, the global one.
+func ParseWeekly(s string) (float64, bool) {
+	s = strings.TrimSuffix(strings.TrimSpace(s), "%")
+	if s == "" || s == "default" {
+		return 0, true
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	return v, err == nil && !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
+// setWeekly sends the typed weekly threshold of the account the prompt is for.
+func (m *Model) setWeekly() (tea.Model, tea.Cmd) {
+	name := m.pending
+	v, ok := ParseWeekly(m.input.Value())
+	if !ok {
+		m.hint = i18n.T("weekly.not_number", m.input.Value())
+		return m, nil
+	}
+	done := i18n.T("tui.weekly_global", name)
+	if v != 0 {
+		done = i18n.T("tui.weekly_set", name, v)
+	}
+	m.mode, m.pending, m.hint = modeList, "", ""
+	m.input.Blur()
+	m.input.Reset()
+	m.change(name, func(x *api.Account) {
+		x.WeeklyThreshold = nil
+		if v != 0 {
+			x.WeeklyThreshold = &v
+		}
+	})
+	return m, m.act(name, done, false, func(ctx context.Context) error { return m.c.SetWeekly(ctx, name, v) })
 }

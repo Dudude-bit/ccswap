@@ -47,6 +47,7 @@ func limitUntil(d time.Duration) opt { return func(a *AccountState) { a.LimitHit
 func needsLogin() opt                { return func(a *AccountState) { a.NeedsLogin = true } }
 func disabled() opt                  { return func(a *AccountState) { a.Enabled = false } }
 func checked(ago time.Duration) opt  { return func(a *AccountState) { a.CheckedAt = now.Add(-ago) } }
+func own(t float64) opt              { return func(a *AccountState) { a.WeeklyThreshold = t } }
 
 func TestDecide(t *testing.T) {
 	tests := []struct {
@@ -206,6 +207,42 @@ func TestDecide(t *testing.T) {
 			func() []AccountState {
 				return []AccountState{acct("a", 30, h5(0)), acct("empty", 30), acct("cur", 20, h5(99))}
 			}, "cur", time.Hour, Decision{"empty", ReasonExhausted}},
+		{"active at its own weekly threshold",
+			func() []AccountState {
+				return []AccountState{acct("mid", 30, h5(10)), acct("cur", 20, h5(10), wk(85), own(85))}
+			}, "cur", time.Hour, Decision{"mid", ReasonExhausted}},
+		{"active under its own weekly threshold stays",
+			func() []AccountState {
+				return []AccountState{acct("lo", 10, h5(10)), acct("cur", 20, h5(10), wk(84), own(85))}
+			}, "cur", time.Hour, Decision{"", ReasonNone}},
+		{"own weekly threshold counts for model weeks",
+			func() []AccountState {
+				return []AccountState{acct("mid", 30, h5(10)), acct("cur", 20, h5(10), model("opus", 85), own(85))}
+			}, "cur", time.Hour, Decision{"mid", ReasonExhausted}},
+		{"own weekly threshold above the global one",
+			func() []AccountState {
+				return []AccountState{acct("lo", 10, h5(10)), acct("cur", 20, h5(10), wk(99), own(100))}
+			}, "cur", time.Hour, Decision{"", ReasonNone}},
+		{"higher priority back once hysteresis under its own threshold",
+			func() []AccountState {
+				return []AccountState{acct("high", 40, h5(10), wk(74), own(85)), acct("cur", 20, h5(10))}
+			}, "cur", time.Hour, Decision{"high", ReasonRecovered}},
+		{"higher priority not back within hysteresis of its own threshold",
+			func() []AccountState {
+				return []AccountState{acct("high", 40, h5(10), wk(76), own(85)), acct("cur", 20, h5(10))}
+			}, "cur", time.Hour, Decision{"", ReasonNone}},
+		{"all exhausted, one past its own weekly threshold is never waited on",
+			func() []AccountState {
+				return []AccountState{acct("mine", 40, wkr(86, 30*time.Minute), own(85)), acct("cur", 20, h5r(99, 2*time.Hour))}
+			}, "cur", time.Hour, Decision{"", ReasonAllExhausted}},
+		{"all exhausted, active past its own weekly threshold moves to one freeing later",
+			func() []AccountState {
+				return []AccountState{acct("a", 10, h5r(99, 3*time.Hour)), acct("cur", 20, wkr(86, time.Hour), own(85))}
+			}, "cur", time.Hour, Decision{"a", ReasonAllExhausted}},
+		{"all exhausted, an own threshold of 100 keeps no room",
+			func() []AccountState {
+				return []AccountState{acct("mine", 40, wkr(100, 30*time.Minute), own(100)), acct("cur", 20, h5r(99, 2*time.Hour))}
+			}, "cur", time.Hour, Decision{"mine", ReasonAllExhausted}},
 		{"active exhausted, no usable target but others in backoff -> all exhausted switch",
 			func() []AccountState {
 				return []AccountState{acct("a", 30, h5(10), limitUntil(10*time.Minute)), acct("cur", 20, wkr(99, 5*time.Hour))}
@@ -240,6 +277,10 @@ func TestExhaustedBy(t *testing.T) {
 		{acct("x", 1, h5r(99, -time.Minute), wk(98)), "seven_day"},
 		{acct("x", 1, h5(10), model("opus", 98)), "model:opus"},
 		{acct("x", 1, h5(10), limitUntil(time.Minute)), "limit_hit"},
+		{acct("x", 1, h5(10), wk(85), own(85)), "seven_day"},
+		{acct("x", 1, h5(10), model("opus", 85), own(85)), "model:opus"},
+		{acct("x", 1, h5(95), wk(10), own(85)), "five_hour"},
+		{acct("x", 1, h5(10), wk(99), own(100)), ""},
 	} {
 		if got := ExhaustedBy(tc.a, th, now); got != tc.want || Exhausted(tc.a, th, now) != (tc.want != "") {
 			t.Errorf("%+v: got %q, want %q", tc.a, got, tc.want)
@@ -275,6 +316,10 @@ func TestFirstFree(t *testing.T) { // what the page names; Decide's all-exhauste
 		{"nothing known", []AccountState{acct("a", 30, h5r(99, 0)), acct("cur", 20, h5r(99, 0))}, ""},
 		{"a stale one is no pick", []AccountState{acct("a", 30, h5r(99, time.Minute), checked(6*time.Minute)), acct("cur", 20, h5r(99, time.Hour))}, "cur"},
 		{"no active", []AccountState{acct("a", 30, h5r(99, 3*time.Hour)), acct("b", 20, h5r(99, time.Hour))}, "b"},
+		{"one past its own weekly threshold is no pick", []AccountState{acct("a", 30, wkr(90, 30*time.Minute), own(85)), acct("cur", 20, h5r(99, time.Hour))}, "cur"},
+		{"the active past its own weekly threshold is left", []AccountState{acct("a", 30, h5r(99, 3*time.Hour)), acct("cur", 20, wkr(90, time.Hour), own(85))}, "a"},
+		{"only the active, past its own weekly threshold", []AccountState{acct("cur", 20, wkr(90, time.Hour), own(85))}, ""},
+		{"blocked by the 5-hour window only, under its own weekly threshold", []AccountState{acct("a", 30, h5r(99, 30*time.Minute), wk(50), own(85)), acct("cur", 20, h5r(99, time.Hour))}, "a"},
 	} {
 		if got := FirstFree(now, tc.accts, "cur", th); got != tc.want {
 			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)

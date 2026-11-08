@@ -237,12 +237,15 @@ function kindOf(a) {
 const onDuty = () => state.accounts.find((a) => kindOf(a) === 'duty');
 const ordered = () => [...state.accounts].sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name));
 
+// weekLimit is the weekly threshold auto-switch leaves a at: its own, or the global one.
+const weekLimit = (a) => a.weekly_threshold ?? state.status.thresholds.seven_day;
+
 function windows(a) {
-  const th = state.status.thresholds;
+  const th = state.status.thresholds, week = weekLimit(a);
   return [
     { label: t('w.five'), short: t('w.fiveShort'), w: a.five_hour, limit: th.five_hour, none: a.no_five_hour_limit },
-    { label: t('w.week'), short: t('w.weekShort'), w: a.seven_day, limit: th.seven_day },
-    ...a.models.map((m) => ({ label: t('w.model', upFirst(m.name)), short: upFirst(m.name), w: m, limit: th.seven_day })),
+    { label: t('w.week'), short: t('w.weekShort'), w: a.seven_day, limit: week },
+    ...a.models.map((m) => ({ label: t('w.model', upFirst(m.name)), short: upFirst(m.name), w: m, limit: week })),
   ];
 }
 
@@ -590,7 +593,8 @@ function renderDuty() {
   tag.textContent = a.name;
   const since = shiftStart();
   $('d-since').replaceChildren(...(since ? tNodes('d.since', clock(since)) : tNodes('d.inUse')));
-  $('d-mail').textContent = t('d.mail', a.email, a.priority);
+  $('d-mail').textContent = a.weekly_threshold == null ? t('d.mail', a.email, a.priority)
+    : t('d.mailWeekAt', a.email, a.priority, pct(a.weekly_threshold));
   const ws = windows(a);
   $('d-models').replaceChildren(...ws.slice(2).map((x) => h('div', x.w.utilization >= x.limit ? 'over' : '', h('dt', '', x.label), h('dd', '', pct(x.w.utilization)))));
   gauge($('g-five'), ws[0]);
@@ -666,7 +670,7 @@ function renderNext() {
       if (leaves) hand.push(h('span', 'at', t('next.at', clock(leaves))));
       pace = a.exhausted ? t(nx ? 'next.leaving' : 'next.stuck', a.name)
         : leaves ? t('next.pace', a.name, clock(leaves)) : t('next.noPace', a.name);
-      const five = pct(th.five_hour), week = pct(th.seven_day);
+      const five = pct(th.five_hour), week = pct(weekLimit(a));
       if (a.no_five_hour_limit) rule = nx ? tNodes('next.ruleWeek', a.name, week, nx.name) : tNodes('next.ruleNoneWeek', a.name, week);
       else rule = nx ? tNodes('next.rule', a.name, five, week, nx.name) : tNodes('next.ruleNone', a.name, five, week);
     }
@@ -941,13 +945,14 @@ function makeRow(name) {
   const r = {
     el, name, account: null,
     prio: el.querySelector('.stepper input'),
+    wk: el.querySelector('.wk'),
     enabled: el.querySelector('.enabled'),
     use: el.querySelector('.use'),
     tok: el.querySelector('.tok'),
     relog: el.querySelector('.relog'),
     msg: el.querySelector('.msg'),
     note: el.querySelector('.row-note'),
-    pending: { prio: false, enabled: false, use: false },
+    pending: { prio: false, wk: false, enabled: false, use: false },
     prioTimer: 0,
   };
   for (const b of el.querySelectorAll('[data-step]')) {
@@ -960,6 +965,8 @@ function makeRow(name) {
   }
   r.prio.addEventListener('change', () => { clearTimeout(r.prioTimer); savePriority(r); });
   r.prio.addEventListener('keydown', (e) => { if (e.key === 'Enter') r.prio.blur(); });
+  r.wk.addEventListener('change', () => saveWeekly(r));
+  r.wk.addEventListener('keydown', (e) => { if (e.key === 'Enter') r.wk.blur(); });
   r.enabled.addEventListener('change', () => saveEnabled(r));
   r.use.addEventListener('click', () => switchTo(r));
   r.tok.addEventListener('click', () => refreshToken(r));
@@ -1039,6 +1046,10 @@ function renderRow(r, a) {
   r.use.setAttribute('aria-label', t('row.useLabel', a.name));
   if (!r.pending.use) r.use.querySelector('.label').textContent = t('row.use');
   if (!r.pending.prio && document.activeElement !== r.prio) r.prio.value = String(a.priority);
+  const global = state.status.thresholds.seven_day;
+  r.wk.placeholder = num(global);
+  r.wk.setAttribute('aria-label', t('row.weekAt', a.name, pct(global)));
+  if (!r.pending.wk && document.activeElement !== r.wk) r.wk.value = a.weekly_threshold == null ? '' : String(a.weekly_threshold);
   if (!r.pending.enabled) r.enabled.checked = a.enabled;
   r.use.hidden = a.active || a.needs_login;
   el.querySelector('.cur').hidden = kind !== 'duty';
@@ -1117,7 +1128,8 @@ function renderHow() {
   const st = state.status, th = st.thresholds;
   $('how').classList.toggle('off', !st.auto);
   $('how-off').hidden = st.auto;
-  $('how-leave').replaceChildren(...tNodes('how.leave', pct(th.five_hour), pct(th.seven_day)));
+  const own = state.accounts.some((a) => a.weekly_threshold != null);
+  $('how-leave').replaceChildren(...tNodes(own ? 'how.leaveOwn' : 'how.leave', pct(th.five_hour), pct(th.seven_day)));
   $('how-back').replaceChildren(...tNodes('how.back', num(th.hysteresis)));
   $('how-stay').replaceChildren(...tNodes('how.stay', duration(th.min_dwell_seconds * 1000)));
   const cache = st.strategy === 'cache-aware';
@@ -1193,7 +1205,7 @@ function setOffline(e) {
 // asleep disables the controls that ask the daemon while it cannot be reached, saying why in their title, and
 // wakes them once it is back.
 function asleep(off) {
-  const live = state.admin ? '#auto, #strategy, #refresh, #upd-go, #accounts .use, #accounts .step, #accounts .enabled, #accounts .stepper input, .relog-go' : '.relog-go';
+  const live = state.admin ? '#auto, #strategy, #refresh, #upd-go, #accounts .use, #accounts .step, #accounts .enabled, #accounts .stepper input, #accounts .wk, .relog-go' : '.relog-go';
   for (const el of document.querySelectorAll(live)) {
     if (off) {
       el.classList.add('asleep');
@@ -1369,6 +1381,37 @@ async function savePriority(r) {
     r.pending.prio = false;
   }
   if (parseInt(r.prio.value, 10) !== r.account.priority) return savePriority(r); // stepped again while saving
+  render();
+}
+
+// saveWeekly sends the row's own weekly threshold; an empty field follows the global one again.
+async function saveWeekly(r) {
+  if (r.pending.wk) return;
+  const prev = r.account.weekly_threshold ?? 0, raw = r.wk.value.trim();
+  const v = raw === '' ? 0 : Number(raw);
+  const back = () => { r.wk.value = prev ? String(prev) : ''; };
+  if (r.wk.validity.badInput || !Number.isFinite(v)) return back();
+  if (v === prev) return;
+  const hyst = state.status.thresholds.hysteresis;
+  if (v !== 0 && !(v > hyst && v <= 100)) {
+    back();
+    return rowMsg(r, t('x.weeklyRange', num(hyst)));
+  }
+  r.pending.wk = true;
+  hold(r.wk, true);
+  hideRowMsg(r);
+  try {
+    r.account = await api('PATCH', `/v1/accounts/${encodeURIComponent(r.name)}`, { weekly_threshold: v });
+    patchLocal(r.name, r.account);
+  } catch (e) {
+    if (e.code === 'unauthorized') return showAuth(true);
+    back();
+    rowMsg(r, `${t('x.weekly')} ${describe(e, r.name)}`);
+    return;
+  } finally {
+    r.pending.wk = false;
+    hold(r.wk, false);
+  }
   render();
 }
 
