@@ -237,7 +237,6 @@ function kindOf(a) {
 const onDuty = () => state.accounts.find((a) => kindOf(a) === 'duty');
 const ordered = () => [...state.accounts].sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name));
 
-// weekLimit is the weekly threshold auto-switch leaves a at: its own, or the global one.
 const weekLimit = (a) => a.weekly_threshold ?? state.status.thresholds.seven_day;
 
 function windows(a) {
@@ -1384,7 +1383,6 @@ async function savePriority(r) {
   render();
 }
 
-// saveWeekly sends the row's own weekly threshold; an empty field follows the global one again.
 async function saveWeekly(r) {
   if (r.pending.wk) return;
   const prev = r.account.weekly_threshold ?? 0, raw = r.wk.value.trim();

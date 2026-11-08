@@ -732,6 +732,38 @@ func TestImportReplaceRenames(t *testing.T) {
 	}
 }
 
+func TestImportReplaceKeepsOwnWeekly(t *testing.T) {
+	e := newTenv(t)
+	e.api.set(func(f *fakeAnthropic) {
+		f.refresh["rB9"] = resp{200, `{"access_token":"atB10","refresh_token":"rB10","expires_in":28800}`}
+	})
+	own := 85.0
+	if _, err := e.d.Patch(context.Background(), "b", api.AccountPatch{WeeklyThreshold: &own}); err != nil {
+		t.Fatal(err)
+	}
+	bundle, c := seal(t, macct("b", "b@x", "rB9", 3))
+	if _, err := e.migrateImport(bundle, c, true); err != nil {
+		t.Fatal(err)
+	}
+	if b := e.account("b"); b.Priority != 3 || b.WeeklyThreshold != 85 {
+		t.Fatalf("a bundle without one keeps the threshold set here: %+v", b)
+	}
+}
+
+func TestImportRefusesOwnWeeklyUnderHysteresis(t *testing.T) {
+	e := newTenv(t)
+	for _, v := range []float64{5, 10, 101} {
+		a := macct("c", "c@x", "rC", 7)
+		a.WeeklyThreshold = v
+		bundle, c := seal(t, a)
+		done := e.untouched()
+		if _, err := e.migrateImport(bundle, c, false); !errors.Is(err, ErrInvalidThresholds) {
+			t.Fatal(v, err)
+		}
+		done()
+	}
+}
+
 func TestImportNameTakenByOtherEmail(t *testing.T) {
 	e := newTenv(t)
 	bundle, c := seal(t, macct("b", "z@x", "rZ", 3))

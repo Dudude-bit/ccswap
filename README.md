@@ -183,8 +183,8 @@ runs here and reports the release's version, and puts it in place with one renam
 same file then restarts on it in its own process, as after the page's Update; the service, its proxy and
 locale settings, and the hook stay as they are, so what `ccswap daemon install` copies from your shell,
 such as the `PATH` a login from the page needs, still reaches the service only through `ccswap daemon
-install`. A daemon that runs another ccswap is left alone, and
-`ccswap update` names the binary to update instead. `ccswap update --check` only says
+install`. A daemon that runs another ccswap is updated too: `ccswap update` asks it to install the
+release over its own binary and restart on it, as the page's Update does. `ccswap update --check` only says
 whether a newer release is out. The daemon checks for one on its own (see
 [What ccswap asks GitHub](#terms-of-use)): `ccswap status` and the web page then say so, and the page
 has an Update button. A build without a version, such as `make install` from a checkout without tags,

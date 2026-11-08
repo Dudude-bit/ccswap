@@ -231,6 +231,10 @@ func TestDecide(t *testing.T) {
 			func() []AccountState {
 				return []AccountState{acct("high", 40, h5(10), wk(76), own(85)), acct("cur", 20, h5(10))}
 			}, "cur", time.Hour, Decision{"", ReasonNone}},
+		{"an own threshold the hysteresis reaches comes back once its week is unused",
+			func() []AccountState {
+				return []AccountState{acct("high", 40, h5(10), wk(0), own(5)), acct("cur", 20, h5(10))}
+			}, "cur", time.Hour, Decision{"high", ReasonRecovered}},
 		{"all exhausted, one past its own weekly threshold is never waited on",
 			func() []AccountState {
 				return []AccountState{acct("mine", 40, wkr(86, 30*time.Minute), own(85)), acct("cur", 20, h5r(99, 2*time.Hour))}

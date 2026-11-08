@@ -17,6 +17,7 @@ import (
 	"github.com/Dudude-bit/ccswap/internal/anthropic"
 	"github.com/Dudude-bit/ccswap/internal/api"
 	"github.com/Dudude-bit/ccswap/internal/claudecode"
+	"github.com/Dudude-bit/ccswap/internal/config"
 	"github.com/Dudude-bit/ccswap/internal/i18n"
 	"github.com/Dudude-bit/ccswap/internal/keychain"
 	"github.com/Dudude-bit/ccswap/internal/migrate"
@@ -306,6 +307,13 @@ func (d *Daemon) MigrateImport(ctx context.Context, r api.MigrateImportRequest) 
 	if err != nil {
 		return api.MigrateImport{}, err
 	}
+	th := d.th()
+	for _, a := range accts {
+		if !config.OwnWeeklyOK(a.WeeklyThreshold, th.Hysteresis) {
+			return api.MigrateImport{}, fmt.Errorf("%w: %v", ErrInvalidThresholds,
+				i18n.Err("daemon.migrate_weekly", a.Name, a.WeeklyThreshold, th.Hysteresis))
+		}
+	}
 	var added []string
 	err = d.o.Switcher.Locked(func() error {
 		repl, err := d.replacedLocked(accts, r.Replace)
@@ -528,11 +536,18 @@ func (d *Daemon) addLocked(accts []migrate.Account, logins []claudecode.Credenti
 		}
 	}
 	err = d.o.Store.Update(func(x *store.State) error {
+		own := map[string]float64{} // a bundle without one keeps the threshold set here
+		for _, a := range x.Accounts {
+			own[a.Name] = a.WeeklyThreshold
+		}
 		x.Accounts = slices.DeleteFunc(x.Accounts, func(a store.Account) bool { return slices.Contains(replaced, a.Name) })
-		for _, a := range accts {
+		for i, a := range accts {
+			w := a.WeeklyThreshold
+			if w == 0 && repl[i].name != "" {
+				w = own[repl[i].name]
+			}
 			x.Accounts = append(x.Accounts, store.Account{Name: a.Name, Email: a.Email, Priority: a.Priority,
-				Enabled: a.Enabled, OAuthAccount: a.OAuthAccount, AuthIndex: store.AuthIndex(a.Name),
-				WeeklyThreshold: a.WeeklyThreshold})
+				Enabled: a.Enabled, OAuthAccount: a.OAuthAccount, AuthIndex: store.AuthIndex(a.Name), WeeklyThreshold: w})
 		}
 		return nil
 	})

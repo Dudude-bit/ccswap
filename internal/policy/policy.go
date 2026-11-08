@@ -44,17 +44,16 @@ const (
 )
 
 type AccountState struct {
-	Name          string
-	Priority      int
-	Enabled       bool
-	NeedsLogin    bool
-	FiveHour      *anthropic.Window
-	SevenDay      *anthropic.Window
-	Models        []anthropic.ModelWindow
-	LimitHitUntil time.Time
-	CheckedAt     time.Time
-	FreshFor      time.Duration // how old CheckedAt may be for the data to count, at least StaleAfter
-	// WeeklyThreshold replaces th.Weekly for this account when above 0; the room above it is kept
+	Name            string
+	Priority        int
+	Enabled         bool
+	NeedsLogin      bool
+	FiveHour        *anthropic.Window
+	SevenDay        *anthropic.Window
+	Models          []anthropic.ModelWindow
+	LimitHitUntil   time.Time
+	CheckedAt       time.Time
+	FreshFor        time.Duration // how old CheckedAt may be for the data to count, at least StaleAfter
 	WeeklyThreshold float64
 }
 
@@ -138,7 +137,7 @@ func recovered(a AccountState, th config.Thresholds, now time.Time) bool {
 		return false
 	}
 	for _, l := range counting(a, th, now) {
-		if l.w.Utilization > l.threshold-th.Hysteresis {
+		if l.w.Utilization > max(l.threshold-th.Hysteresis, 0) { // an own threshold config.toml's hysteresis reaches
 			return false
 		}
 	}

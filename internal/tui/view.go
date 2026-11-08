@@ -270,7 +270,6 @@ func (m *Model) windows(a api.Account) []window {
 	return out
 }
 
-// weekLimit is the weekly threshold a leaves at: its own, or the global one.
 func weekLimit(th api.Thresholds, a api.Account) float64 {
 	if a.WeeklyThreshold != nil {
 		return *a.WeeklyThreshold

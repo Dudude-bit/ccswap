@@ -147,7 +147,6 @@ func usageAt(h5 float64, reset time.Time) resp {
 		h5, reset.Format(time.RFC3339), t0.Add(72*time.Hour).Format(time.RFC3339))}
 }
 
-// usageWeek is usage at h5 of the 5-hour window, resetting in 2 hours, and at week of the weekly one.
 func usageWeek(h5, week float64) resp {
 	return resp{200, fmt.Sprintf(`{"five_hour":{"utilization":%v,"resets_at":%q},"seven_day":{"utilization":%v,"resets_at":%q}}`,
 		h5, t0.Add(2*time.Hour).Format(time.RFC3339), week, t0.Add(72*time.Hour).Format(time.RFC3339))}
@@ -1791,7 +1790,40 @@ func TestOwnWeeklyThresholdNowhereToGo(t *testing.T) {
 	}
 	e.api.set(func(f *fakeAnthropic) { f.usage["atA"] = usageWeek(10, 86) })
 	e.poll()
-	e.msgs(note("daemon.own_weekly_no_other", "a"))
+	want := note("daemon.own_weekly_no_other", "a")
+	e.msgs(want)
+	zero := 0.0
+	if _, err := e.d.Patch(ctx, "a", api.AccountPatch{WeeklyThreshold: &zero}); err != nil {
+		t.Fatal(err)
+	}
+	e.clk.Add(time.Minute)
+	e.poll()
+	if _, err := e.d.Patch(ctx, "a", api.AccountPatch{WeeklyThreshold: &v}); err != nil {
+		t.Fatal(err)
+	}
+	e.clk.Add(time.Minute)
+	e.poll()
+	e.msgs(want, want)
+}
+
+func TestPatchWithoutWeeklyTakesNoConfigLock(t *testing.T) {
+	e := newTenv(t)
+	e.d.cfgMu.Lock()
+	defer e.d.cfgMu.Unlock()
+	done := make(chan error, 1)
+	p := 5
+	go func() {
+		_, err := e.d.Patch(context.Background(), "b", api.AccountPatch{Priority: &p})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a priority change waited on a config.toml rewrite")
+	}
 }
 
 func TestSetThresholdsRejectsInvalid(t *testing.T) {

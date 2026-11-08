@@ -15,6 +15,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/Dudude-bit/ccswap/internal/api"
+	"github.com/Dudude-bit/ccswap/internal/config"
 	"github.com/Dudude-bit/ccswap/internal/i18n"
 	"github.com/Dudude-bit/ccswap/internal/store"
 )
@@ -375,7 +376,6 @@ func (m *Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// ParseWeekly reads an own weekly threshold as typed, "85" or "85%"; empty or "default" is 0, the global one.
 func ParseWeekly(s string) (float64, bool) {
 	s = strings.TrimSuffix(strings.TrimSpace(s), "%")
 	if s == "" || s == "default" {
@@ -385,12 +385,15 @@ func ParseWeekly(s string) (float64, bool) {
 	return v, err == nil && !math.IsNaN(v) && !math.IsInf(v, 0)
 }
 
-// setWeekly sends the typed weekly threshold of the account the prompt is for.
 func (m *Model) setWeekly() (tea.Model, tea.Cmd) {
-	name := m.pending
+	name, hyst := m.pending, m.st.Thresholds.Hysteresis
 	v, ok := ParseWeekly(m.input.Value())
-	if !ok {
+	switch {
+	case !ok:
 		m.hint = i18n.T("weekly.not_number", m.input.Value())
+		return m, nil
+	case !config.OwnWeeklyOK(v, hyst):
+		m.hint = i18n.T("daemon.own_weekly_range", name, hyst)
 		return m, nil
 	}
 	done := i18n.T("tui.weekly_global", name)

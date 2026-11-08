@@ -51,6 +51,8 @@ type fake struct {
 	update   *api.Release // Status.Update
 	adminURL *string      // Status.AdminUrl
 	bin      string       // the binary the daemon runs, which Restart restarts on
+	selfUp   string       // the release InstallUpdate puts the daemon on
+	selfErr  error        // InstallUpdate's refusal
 	err      error
 	delay    time.Duration // Status and Activate answer this late
 
@@ -82,6 +84,8 @@ func (f *fake) migrateCalls() string {
 
 func (f *fake) Status(context.Context) (api.Status, error) {
 	time.Sleep(f.delay)
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return api.Status{Active: "work", Auto: true, Strategy: api.CacheAware, TargetService: "Claude Code-credentials",
 		Thresholds: api.Thresholds{FiveHour: 95, SevenDay: 98}, UnknownActive: true, Listen: f.listen, AdminUrl: f.adminURL, Version: f.version, Update: f.update}, f.err
 }
@@ -145,7 +149,14 @@ func (f *fake) WebCode(context.Context) (api.WebCode, error) {
 func (f *fake) UseWebCode(context.Context, string) error { return f.err }
 func (f *fake) Version() string                          { return "test" }
 func (f *fake) InstallUpdate(context.Context) (api.Release, error) {
-	return api.Release{}, f.err
+	f.call("update")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.selfErr != nil {
+		return api.Release{}, f.selfErr
+	}
+	f.version = f.selfUp
+	return api.Release{Version: f.selfUp}, f.err
 }
 func (f *fake) Restart(_ context.Context, bin string) (api.Restart, error) {
 	f.call("restart " + bin)

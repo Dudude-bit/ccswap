@@ -461,7 +461,12 @@ func TestWeeklyKeySetsTheOwnThreshold(t *testing.T) {
 	if cmd != nil || f.weekly != nil || !strings.Contains(text(m), i18n.T("weekly.not_number", "lots")) {
 		t.Fatalf("a word must not be sent: %v\n%s", f.weekly, text(m))
 	}
-	m, cmd = send(typed(erased(m, 4), "85"), key("enter"))
+	m, cmd = send(typed(erased(m, 4), "250"), key("enter"))
+	if cmd != nil || f.weekly != nil || m.(*Model).accts[0].WeeklyThreshold != nil ||
+		!strings.Contains(text(m), i18n.T("daemon.own_weekly_range", "work", 0.0)) {
+		t.Fatalf("250%% must not be sent nor shown: %v\n%s", f.weekly, text(m))
+	}
+	m, cmd = send(typed(erased(m, 3), "85"), key("enter"))
 	if own := m.(*Model).accts[0].WeeklyThreshold; own == nil || *own != 85 || !strings.Contains(text(m), i18n.T("weekly.leaves_at", 85.0)) {
 		t.Fatalf("85%% must show before the daemon answers:\n%s", text(m))
 	}

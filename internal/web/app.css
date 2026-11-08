@@ -718,7 +718,7 @@ body:not(.ro) .viewer { display: none !important; }
 .accts.blocks, .accts.blocks tbody, .accts.blocks tr, .accts.blocks .row > * { display: block; }
 .accts.blocks .row {
   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 16px;
-  grid-template-areas: "acct acct state act" "five week next models" "prio wk auto login";
+  grid-template-areas: "acct acct state act" "five week next models" "prio wk sw login";
   padding: 14px 0;
   border-bottom: 1px solid var(--line);
 }
@@ -737,7 +737,7 @@ body:not(.ro) .viewer { display: none !important; }
 .accts.blocks .login-line { display: inline-flex; }
 .accts.blocks .c-prio { grid-area: prio; }
 .accts.blocks .c-wk { grid-area: wk; }
-.accts.blocks .c-auto { grid-area: auto; width: auto; }
+.accts.blocks .c-auto { grid-area: sw; width: auto; }
 .accts.blocks .c-act { grid-area: act; width: auto; align-self: start; }
 .accts.blocks .use-line { grid-template-columns: 38px minmax(0, 1fr); row-gap: 2px; }
 .accts.blocks .use-line .rs { grid-column: 1 / -1; font-size: 12.5px; }
@@ -773,7 +773,7 @@ body:not(.ro) .viewer { display: none !important; }
   .sk-duty { height: 300px; }
 
 
-  .accts.blocks .row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "acct act" "state state" "five week" "next models" "login login" "prio wk"; }
+  .accts.blocks .row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "acct act" "state state" "five week" "next models" "login sw" "prio wk"; }
   .relog-box { width: 100%; max-width: none; margin: auto 0 0; border-width: 1px 0 0; border-radius: 6px 6px 0 0; max-height: calc(100dvh - 24px); }
   .relog-card { padding: 20px 16px calc(16px + env(safe-area-inset-bottom)); }
   .rules { grid-template-columns: minmax(0, 1fr); }

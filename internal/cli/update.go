@@ -64,8 +64,9 @@ func newUpdateCmd() *cobra.Command {
 	return c
 }
 
-// restartDaemon puts a daemon that runs bin on the new release as the page's Update does: it restarts in its
-// own process, and its service and the hook stay as they are. A daemon that runs another binary is left alone.
+// restartDaemon puts the daemon on the new release as the page's Update does: it restarts in its own process,
+// and its service and the hook stay as they are. A daemon that runs another binary installs the release over
+// that one first.
 func restartDaemon(cmd *cobra.Command, bin, version string) error {
 	out := cmd.OutOrStdout()
 	cl, err := client()
@@ -96,10 +97,26 @@ func restartDaemon(cmd *cobra.Command, bin, version string) error {
 		return waitDaemon(cmd, cl, version)
 	case r.JSON200.Bin == "":
 		fmt.Fprintf(out, i18n.T("update.restart_daemon"), version)
-	default:
-		fmt.Fprintf(out, i18n.T("update.other_daemon"), r.JSON200.Bin)
+		return nil
 	}
-	return nil
+	return updateOther(cmd, cl, r.JSON200.Bin)
+}
+
+func updateOther(cmd *cobra.Command, cl *api.ClientWithResponses, bin string) error {
+	fmt.Fprintf(cmd.OutOrStdout(), i18n.T("update.other_daemon"), bin)
+	ctx, cancel := within(cmd, installTimeout)
+	defer cancel()
+	r, err := cl.InstallUpdateWithResponse(ctx)
+	if err != nil {
+		return i18n.Err("update.other_daemon_failed", bin, down(err))
+	}
+	if err := apiErr(r.StatusCode(), r.Body, "", 200); err != nil {
+		return i18n.Err("update.other_daemon_failed", bin, err)
+	}
+	if r.JSON200 == nil {
+		return errBadResp
+	}
+	return waitDaemon(cmd, cl, r.JSON200.Version)
 }
 
 // waitDaemon waits for the daemon to answer as version once it restarted.

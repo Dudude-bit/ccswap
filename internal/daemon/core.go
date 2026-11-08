@@ -1614,8 +1614,10 @@ func (d *Daemon) Adopt(ctx context.Context, r api.AdoptRequest) (api.Account, er
 
 func (d *Daemon) Patch(_ context.Context, name string, p api.AccountPatch) (api.Account, error) {
 	defer d.bus.publish()
-	d.cfgMu.Lock() // the hysteresis an own weekly threshold is checked against holds until it is saved
-	defer d.cfgMu.Unlock()
+	if p.WeeklyThreshold != nil {
+		d.cfgMu.Lock() // the hysteresis it is checked against holds until it is saved
+		defer d.cfgMu.Unlock()
+	}
 	err := d.o.Switcher.Locked(func() error {
 		return d.o.Store.Update(func(x *store.State) error {
 			for i := range x.Accounts {
@@ -1733,10 +1735,8 @@ func (d *Daemon) SetLang(_ context.Context, lang string) error {
 	return nil
 }
 
-// ownWeekly refuses an own weekly threshold of name that th.Hysteresis leaves no room to come back
-// under; 0 follows th.Weekly again.
 func ownWeekly(th config.Thresholds, name string, v float64) error {
-	if v != 0 && !(v > th.Hysteresis && v <= 100) { // NaN is in no range
+	if !config.OwnWeeklyOK(v, th.Hysteresis) {
 		return fmt.Errorf("%w: %v", ErrInvalidThresholds, i18n.Err("daemon.own_weekly_range", name, th.Hysteresis))
 	}
 	return nil
@@ -1763,7 +1763,7 @@ func (d *Daemon) SetThresholds(_ context.Context, t api.Thresholds) (api.Thresho
 	d.cfgMu.Lock()
 	defer d.cfgMu.Unlock()
 	for _, a := range d.o.Store.State().Accounts {
-		if a.WeeklyThreshold > 0 && th.Hysteresis >= a.WeeklyThreshold {
+		if !config.OwnWeeklyOK(a.WeeklyThreshold, th.Hysteresis) {
 			return api.Thresholds{}, fmt.Errorf("%w: %v", ErrInvalidThresholds,
 				i18n.Err("daemon.hysteresis_over_own_weekly", a.Name, a.WeeklyThreshold))
 		}
