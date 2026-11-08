@@ -764,6 +764,32 @@ func TestImportRefusesOwnWeeklyUnderHysteresis(t *testing.T) {
 	}
 }
 
+func TestImportChecksThresholdsUnderTheConfigLock(t *testing.T) {
+	e := newTenv(t)
+	e.api.set(func(f *fakeAnthropic) {
+		f.refresh["rC"] = resp{200, `{"access_token":"atC2","refresh_token":"rC2","expires_in":28800}`}
+	})
+	a := macct("c", "c@x", "rC", 7)
+	a.WeeklyThreshold = 85
+	bundle, c := seal(t, a)
+	e.d.cfgMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.migrateImport(bundle, c, false)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		e.d.cfgMu.Unlock()
+		t.Fatal("imported while a config.toml rewrite could change the hysteresis", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	e.d.cfgMu.Unlock()
+	if err := <-done; err != nil || e.account("c").WeeklyThreshold != 85 {
+		t.Fatal(err, e.account("c"))
+	}
+}
+
 func TestImportNameTakenByOtherEmail(t *testing.T) {
 	e := newTenv(t)
 	bundle, c := seal(t, macct("b", "z@x", "rZ", 3))

@@ -1389,12 +1389,12 @@ async function saveWeekly(r) {
   const v = raw === '' ? 0 : Number(raw);
   const back = () => { r.wk.value = prev ? String(prev) : ''; };
   if (r.wk.validity.badInput || !Number.isFinite(v)) return back();
-  if (v === prev) return;
   const hyst = state.status.thresholds.hysteresis;
-  if (v !== 0 && !(v > hyst && v <= 100)) {
+  if (raw !== '' && !(v > hyst && v <= 100)) {
     back();
     return rowMsg(r, t('x.weeklyRange', num(hyst)));
   }
+  if (v === prev) return;
   r.pending.wk = true;
   hold(r.wk, true);
   hideRowMsg(r);

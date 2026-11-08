@@ -307,15 +307,15 @@ func (d *Daemon) MigrateImport(ctx context.Context, r api.MigrateImportRequest) 
 	if err != nil {
 		return api.MigrateImport{}, err
 	}
-	th := d.th()
-	for _, a := range accts {
-		if !config.OwnWeeklyOK(a.WeeklyThreshold, th.Hysteresis) {
-			return api.MigrateImport{}, fmt.Errorf("%w: %v", ErrInvalidThresholds,
-				i18n.Err("daemon.migrate_weekly", a.Name, a.WeeklyThreshold, th.Hysteresis))
-		}
-	}
 	var added []string
+	d.cfgMu.Lock() // the hysteresis the thresholds are checked against holds until they are saved
 	err = d.o.Switcher.Locked(func() error {
+		th := d.th()
+		for _, a := range accts {
+			if !config.OwnWeeklyOK(a.WeeklyThreshold, th.Hysteresis) {
+				return fmt.Errorf("%w: %v", ErrInvalidThresholds, i18n.Err("daemon.migrate_weekly", a.Name, a.WeeklyThreshold, th.Hysteresis))
+			}
+		}
 		repl, err := d.replacedLocked(accts, r.Replace)
 		if err != nil {
 			return err
@@ -340,6 +340,7 @@ func (d *Daemon) MigrateImport(ctx context.Context, r api.MigrateImportRequest) 
 		d.mu.Unlock()
 		return nil
 	})
+	d.cfgMu.Unlock()
 	if err != nil {
 		return api.MigrateImport{}, err
 	}
