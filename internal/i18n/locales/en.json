@@ -482,6 +482,7 @@
   "update.not_release": "this ccswap (%s) is not a release build, so it cannot tell whether %s is newer: install a release as the README says",
   "update.not_release_build": "this ccswap (%s) is not a release build, so there is no release to update it to: install a release as the README says",
   "update.other_daemon": "The daemon runs %s, not this ccswap: it installs the release over it and restarts…\n",
+  "update.other_daemon_current": "The daemon runs %s, which is on %s already\n",
   "update.other_daemon_failed": "the daemon runs %[1]s, not this ccswap, and did not update it (%[2]v): run %[1]s update",
   "update.rate_limited": "GitHub limits requests from this address for another %d min: try again then, or put a GitHub token in GH_TOKEN or GITHUB_TOKEN, whose limit is far higher",
   "update.rate_limited_token": "GitHub limits the requests of the token in %s for another %d min: try again then",

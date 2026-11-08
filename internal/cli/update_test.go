@@ -162,6 +162,45 @@ func TestUpdateAnotherDaemonThatCannot(t *testing.T) {
 	}
 }
 
+// TestUpdateAnotherDaemonOnTheRelease: a daemon on another binary that runs the release already is left as it is.
+func TestUpdateAnotherDaemonOnTheRelease(t *testing.T) {
+	g := &github{latest: "v0.2.0"}
+	bin := g.seam(t)
+	f := &fake{bin: "/usr/local/bin/ccswap", version: "v0.2.0", selfErr: daemon.ErrNoUpdate}
+	env(t, f)
+	out, err := runAs(t, "v0.1.0", "update")
+	want := i18n.T("update.installing", "v0.1.0", "v0.2.0") + i18n.T("update.installed", bin) +
+		i18n.T("update.other_daemon_current", "/usr/local/bin/ccswap", "v0.2.0")
+	if err != nil || out != want {
+		t.Fatalf("%v\n%q, want\n%q", err, out, want)
+	}
+	if f.migrateCalls() != "restart "+bin {
+		t.Fatalf("daemon asked %q", f.migrateCalls())
+	}
+}
+
+// TestUpdateCatchesUpAnotherDaemon: this ccswap is on the newest release already, as a ccswap update from
+// before it left things, and a daemon on another binary still runs an older one: it gets the release.
+func TestUpdateCatchesUpAnotherDaemon(t *testing.T) {
+	g := &github{latest: "v0.2.0"}
+	bin := g.seam(t)
+	f := &fake{bin: "/usr/local/bin/ccswap", version: "v0.1.0", selfUp: "v0.2.0"}
+	env(t, f)
+	out, err := runAs(t, "v0.2.0", "update")
+	want := i18n.T("update.latest", "v0.2.0") + i18n.T("update.other_daemon", "/usr/local/bin/ccswap") +
+		i18n.T("update.daemon_runs", "v0.2.0")
+	if err != nil || out != want {
+		t.Fatalf("%v\n%q, want\n%q", err, out, want)
+	}
+	if len(g.installed) != 0 || f.migrateCalls() != "restart "+bin+" update" {
+		t.Fatalf("installed %v, daemon asked %q", g.installed, f.migrateCalls())
+	}
+	if out, err := runAs(t, "v0.2.0", "update"); err != nil || out != i18n.T("update.latest", "v0.2.0") ||
+		f.migrateCalls() != "restart "+bin+" update" {
+		t.Fatalf("a daemon on the release: %v %q, daemon asked %q", err, out, f.migrateCalls())
+	}
+}
+
 func TestUpdateWithoutDaemon(t *testing.T) {
 	g := &github{latest: "v0.2.0"}
 	bin := g.seam(t)

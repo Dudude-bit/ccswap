@@ -41,7 +41,10 @@ func newUpdateCmd() *cobra.Command {
 				return i18n.Err("update.not_release", version, rel.Version)
 			case !update.Newer(rel.Version, version):
 				fmt.Fprintf(out, i18n.T("update.latest"), version)
-				return nil
+				if check {
+					return nil
+				}
+				return catchUp(cmd, rel.Version)
 			case check:
 				fmt.Fprintf(out, i18n.T("update.available"), rel.Version, version, rel.URL)
 				return nil
@@ -99,12 +102,39 @@ func restartDaemon(cmd *cobra.Command, bin, version string) error {
 		fmt.Fprintf(out, i18n.T("update.restart_daemon"), version)
 		return nil
 	}
-	return updateOther(cmd, cl, r.JSON200.Bin)
+	return updateOther(cmd, cl, r.JSON200.Bin, version)
 }
 
-func updateOther(cmd *cobra.Command, cl *api.ClientWithResponses, bin string) error {
+// catchUp puts a daemon that runs a release older than version on it when this ccswap has nothing to install:
+// a ccswap update from before this one left a daemon on another binary as it was.
+func catchUp(cmd *cobra.Command, version string) error {
+	cl, err := client()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := within(cmd, readTimeout)
+	defer cancel()
+	if st, err := cl.GetStatusWithResponse(ctx); err != nil || st.JSON200 == nil || !update.Newer(version, st.JSON200.Version) {
+		return nil // no daemon, or one on this release
+	}
+	bin, err := updateTarget()
+	if err != nil {
+		return err
+	}
+	return restartDaemon(cmd, bin, version)
+}
+
+// updateOther has the daemon on bin, another binary, install the release over it, unless it runs version already.
+func updateOther(cmd *cobra.Command, cl *api.ClientWithResponses, bin, version string) error {
+	ctx, cancel := within(cmd, readTimeout)
+	st, err := cl.GetStatusWithResponse(ctx)
+	cancel()
+	if err == nil && st.JSON200 != nil && update.Known(st.JSON200.Version) && !update.Newer(version, st.JSON200.Version) {
+		fmt.Fprintf(cmd.OutOrStdout(), i18n.T("update.other_daemon_current"), bin, st.JSON200.Version)
+		return nil
+	}
 	fmt.Fprintf(cmd.OutOrStdout(), i18n.T("update.other_daemon"), bin)
-	ctx, cancel := within(cmd, installTimeout)
+	ctx, cancel = within(cmd, installTimeout)
 	defer cancel()
 	r, err := cl.InstallUpdateWithResponse(ctx)
 	if err != nil {
