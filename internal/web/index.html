@@ -179,6 +179,7 @@
               <th scope="col" data-t="col.next"></th>
               <th scope="col" data-t="col.login" data-t-title="col.loginTitle"></th>
               <th scope="col" data-t="col.prio"></th>
+              <th scope="col" data-t="col.weekAt" data-t-title="col.weekAtTitle"></th>
               <th scope="col" class="admin" data-t="col.auto" data-t-title="col.autoTitle"></th>
               <th scope="col" class="admin"><span class="sr-only" data-t="col.switch"></span></th>
             </tr>
@@ -301,10 +302,11 @@
           <button type="button" class="step admin" data-step="1"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg></button>
         </span>
       </td>
+      <td class="c-wk" data-col="col.weekAt"><span class="wk-line"><input type="number" class="wk" inputmode="decimal" min="1" max="100" step="any"><span class="wk-u">%</span></span></td>
       <td class="c-auto admin" data-col="col.auto"><input type="checkbox" class="switch enabled" role="switch"></td>
       <td class="c-act admin"><button type="button" class="btn use"><span class="spin" aria-hidden="true"></span><span class="label"></span></button><span class="cur" data-t="row.inUse" hidden></span></td>
     </tr>
-    <tr class="row-msg" hidden><td colspan="10"><p class="row-note" hidden></p><div class="strip msg" role="alert" hidden></div></td></tr>
+    <tr class="row-msg" hidden><td colspan="11"><p class="row-note" hidden></p><div class="strip msg" role="alert" hidden></div></td></tr>
   </tbody>
 </template>
 </body>

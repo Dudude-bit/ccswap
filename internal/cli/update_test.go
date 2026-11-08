@@ -129,19 +129,89 @@ func TestUpdateRestartsTheDaemonInPlace(t *testing.T) {
 	}
 }
 
-func TestUpdateLeavesAnotherDaemon(t *testing.T) {
+// TestUpdateUpdatesAnotherDaemon: a daemon that runs another binary installs the release over its own, as
+// after the page's Update, and its service stays as it is.
+func TestUpdateUpdatesAnotherDaemon(t *testing.T) {
 	g := &github{latest: "v0.2.0"}
-	g.seam(t)
-	f := &fake{bin: "/usr/local/bin/ccswap", version: "v0.1.0"}
+	bin := g.seam(t)
+	f := &fake{bin: "/usr/local/bin/ccswap", version: "v0.1.0", selfUp: "v0.2.0"}
 	env(t, f)
 	installed := service(t, "/usr/local/bin/ccswap")
 	plist, _ := installed()
 	out, err := runAs(t, "v0.1.0", "update")
-	if err != nil || !strings.HasSuffix(out, i18n.T("update.other_daemon", "/usr/local/bin/ccswap")) {
-		t.Fatalf("%v %q", err, out)
+	want := i18n.T("update.installing", "v0.1.0", "v0.2.0") + i18n.T("update.installed", bin) +
+		i18n.T("update.other_daemon", "/usr/local/bin/ccswap") + i18n.T("update.daemon_runs", "v0.2.0")
+	if err != nil || out != want {
+		t.Fatalf("%v\n%q, want\n%q", err, out, want)
+	}
+	if len(g.installed) != 1 || f.migrateCalls() != "restart "+bin+" update" {
+		t.Fatalf("installed %v, daemon asked %q", g.installed, f.migrateCalls())
 	}
 	if now, calls := installed(); now != plist || len(calls) != 0 {
 		t.Fatalf("the other binary's service was touched: launchctl %q\n%s", calls, now)
+	}
+}
+
+func TestUpdateAnotherDaemonThatCannot(t *testing.T) {
+	g := &github{latest: "v0.2.0"}
+	g.seam(t)
+	env(t, &fake{bin: "/usr/local/bin/ccswap", version: "v0.1.0", selfErr: daemon.ErrUpdating})
+	_, err := runAs(t, "v0.1.0", "update")
+	if want := i18n.Err("update.other_daemon_failed", "/usr/local/bin/ccswap", daemon.ErrUpdating); err == nil || err.Error() != want.Error() {
+		t.Fatal(err)
+	}
+}
+
+// TestUpdateAnotherDaemonOnTheRelease: a daemon on another binary that runs the release already is left as it is.
+func TestUpdateAnotherDaemonOnTheRelease(t *testing.T) {
+	g := &github{latest: "v0.2.0"}
+	bin := g.seam(t)
+	f := &fake{bin: "/usr/local/bin/ccswap", version: "v0.2.0", selfErr: daemon.ErrNoUpdate}
+	env(t, f)
+	out, err := runAs(t, "v0.1.0", "update")
+	want := i18n.T("update.installing", "v0.1.0", "v0.2.0") + i18n.T("update.installed", bin) +
+		i18n.T("update.other_daemon_current", "/usr/local/bin/ccswap", "v0.2.0")
+	if err != nil || out != want {
+		t.Fatalf("%v\n%q, want\n%q", err, out, want)
+	}
+	if f.migrateCalls() != "restart "+bin {
+		t.Fatalf("daemon asked %q", f.migrateCalls())
+	}
+}
+
+// TestUpdateAnotherDaemonWithoutAVersion: a daemon on another binary built without a version is not asked to
+// update; ccswap update says to update it the way it was built.
+func TestUpdateAnotherDaemonWithoutAVersion(t *testing.T) {
+	g := &github{latest: "v0.2.0"}
+	g.seam(t)
+	f := &fake{bin: "/usr/local/bin/ccswap", version: "dev", selfErr: daemon.ErrNoUpdate}
+	env(t, f)
+	out, err := runAs(t, "v0.1.0", "update")
+	if err != nil || !strings.HasSuffix(out, i18n.T("update.other_daemon_unversioned", "/usr/local/bin/ccswap", "dev")) ||
+		strings.Contains(f.migrateCalls(), "update") {
+		t.Fatalf("%v %q, daemon asked %q", err, out, f.migrateCalls())
+	}
+}
+
+// TestUpdateCatchesUpAnotherDaemon: this ccswap is on the newest release already, as a ccswap update from
+// before it left things, and a daemon on another binary still runs an older one: it gets the release.
+func TestUpdateCatchesUpAnotherDaemon(t *testing.T) {
+	g := &github{latest: "v0.2.0"}
+	bin := g.seam(t)
+	f := &fake{bin: "/usr/local/bin/ccswap", version: "v0.1.0", selfUp: "v0.2.0"}
+	env(t, f)
+	out, err := runAs(t, "v0.2.0", "update")
+	want := i18n.T("update.latest", "v0.2.0") + i18n.T("update.other_daemon", "/usr/local/bin/ccswap") +
+		i18n.T("update.daemon_runs", "v0.2.0")
+	if err != nil || out != want {
+		t.Fatalf("%v\n%q, want\n%q", err, out, want)
+	}
+	if len(g.installed) != 0 || f.migrateCalls() != "restart "+bin+" update" {
+		t.Fatalf("installed %v, daemon asked %q", g.installed, f.migrateCalls())
+	}
+	if out, err := runAs(t, "v0.2.0", "update"); err != nil || out != i18n.T("update.latest", "v0.2.0") ||
+		f.migrateCalls() != "restart "+bin+" update" {
+		t.Fatalf("a daemon on the release: %v %q, daemon asked %q", err, out, f.migrateCalls())
 	}
 }
 

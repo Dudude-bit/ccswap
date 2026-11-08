@@ -91,8 +91,9 @@ GitHub, over HTTPS:
 - A GitHub token in `GH_TOKEN` or `GITHUB_TOKEN` goes only to `api.github.com`, with the ask for the
   newest release, never to the host the archive downloads from.
 - An update never copies the environment of the shell it runs in into the service: the daemon restarts in
-  its own process, and its service and the hook stay as installed. `ccswap update` restarts only a daemon
-  that runs the binary it replaced.
+  its own process, and its service and the hook stay as installed. `ccswap update` restarts a daemon that
+  runs the binary it replaced; a daemon on another binary installs the release over that one itself, as
+  after the page's Update.
 - The page's Update needs the admin key, and a loopback listener and `Host` or the `Host` of
   `[web] admin_url`, like any other change.
   The read key cannot start an update.

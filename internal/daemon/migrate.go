@@ -17,6 +17,7 @@ import (
 	"github.com/Dudude-bit/ccswap/internal/anthropic"
 	"github.com/Dudude-bit/ccswap/internal/api"
 	"github.com/Dudude-bit/ccswap/internal/claudecode"
+	"github.com/Dudude-bit/ccswap/internal/config"
 	"github.com/Dudude-bit/ccswap/internal/i18n"
 	"github.com/Dudude-bit/ccswap/internal/keychain"
 	"github.com/Dudude-bit/ccswap/internal/migrate"
@@ -103,7 +104,7 @@ func (d *Daemon) MigrateExport(_ context.Context, names []string) (api.MigrateEx
 				return err
 			}
 			accts = append(accts, migrate.Account{Name: a.Name, Email: a.Email, Priority: a.Priority, Enabled: a.Enabled,
-				OAuthAccount: a.OAuthAccount, Credentials: b})
+				OAuthAccount: a.OAuthAccount, Credentials: b, WeeklyThreshold: a.WeeklyThreshold})
 			rts[n] = rtHash(c.OAuth.RefreshToken)
 		}
 		bundle, code, err := migrate.Seal(accts)
@@ -307,7 +308,14 @@ func (d *Daemon) MigrateImport(ctx context.Context, r api.MigrateImportRequest) 
 		return api.MigrateImport{}, err
 	}
 	var added []string
+	d.cfgMu.Lock() // the hysteresis the thresholds are checked against holds until they are saved
 	err = d.o.Switcher.Locked(func() error {
+		th := d.th()
+		for _, a := range accts {
+			if !config.OwnWeeklyOK(a.WeeklyThreshold, th.Hysteresis) {
+				return fmt.Errorf("%w: %v", ErrInvalidThresholds, i18n.Err("daemon.migrate_weekly", a.Name, a.WeeklyThreshold, th.Hysteresis))
+			}
+		}
 		repl, err := d.replacedLocked(accts, r.Replace)
 		if err != nil {
 			return err
@@ -332,6 +340,7 @@ func (d *Daemon) MigrateImport(ctx context.Context, r api.MigrateImportRequest) 
 		d.mu.Unlock()
 		return nil
 	})
+	d.cfgMu.Unlock()
 	if err != nil {
 		return api.MigrateImport{}, err
 	}
@@ -528,10 +537,18 @@ func (d *Daemon) addLocked(accts []migrate.Account, logins []claudecode.Credenti
 		}
 	}
 	err = d.o.Store.Update(func(x *store.State) error {
+		own := map[string]float64{} // a bundle without one keeps the threshold set here
+		for _, a := range x.Accounts {
+			own[a.Name] = a.WeeklyThreshold
+		}
 		x.Accounts = slices.DeleteFunc(x.Accounts, func(a store.Account) bool { return slices.Contains(replaced, a.Name) })
-		for _, a := range accts {
+		for i, a := range accts {
+			w := a.WeeklyThreshold
+			if w == 0 && repl[i].name != "" {
+				w = own[repl[i].name]
+			}
 			x.Accounts = append(x.Accounts, store.Account{Name: a.Name, Email: a.Email, Priority: a.Priority,
-				Enabled: a.Enabled, OAuthAccount: a.OAuthAccount, AuthIndex: store.AuthIndex(a.Name)})
+				Enabled: a.Enabled, OAuthAccount: a.OAuthAccount, AuthIndex: store.AuthIndex(a.Name), WeeklyThreshold: w})
 		}
 		return nil
 	})

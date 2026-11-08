@@ -248,7 +248,7 @@ type window struct {
 
 func (m *Model) windows(a api.Account) []window {
 	th := m.st.Thresholds
-	five, week := th.FiveHour, th.SevenDay
+	five, week := th.FiveHour, weekLimit(th, a)
 	if five <= 0 {
 		five = 100
 	}
@@ -268,6 +268,13 @@ func (m *Model) windows(a api.Account) []window {
 			&api.Window{Utilization: mw.Utilization, ResetsAt: mw.ResetsAt}, week, false})
 	}
 	return out
+}
+
+func weekLimit(th api.Thresholds, a api.Account) float64 {
+	if a.WeeklyThreshold != nil {
+		return *a.WeeklyThreshold
+	}
+	return th.SevenDay
 }
 
 // soonest is the window whose reset comes first after now.
@@ -506,9 +513,13 @@ func (m *Model) detail(w int, narrow bool, a api.Account, now time.Time) []strin
 	case !a.Enabled:
 		tag = &seg{i18n.T("tui.disabled"), p.dim}
 	}
-	lines := []row{{segs: []seg{{a.Email, p.dim}, {"   " + i18n.T("tui.priority") + " ", p.dim}, {strconv.Itoa(a.Priority), p.plain}}}}
+	first := []seg{{a.Email, p.dim}, {"   " + i18n.T("tui.priority") + " ", p.dim}, {strconv.Itoa(a.Priority), p.plain}}
+	if a.WeeklyThreshold != nil {
+		first = append(first, seg{"   " + i18n.T("weekly.leaves_at", *a.WeeklyThreshold), p.dim})
+	}
+	lines := []row{{segs: first}}
 	th := m.st.Thresholds
-	five, week := strconv.FormatFloat(100-th.FiveHour, 'f', -1, 64)+"%", strconv.FormatFloat(100-th.SevenDay, 'f', -1, 64)+"%"
+	five, week := strconv.FormatFloat(100-th.FiveHour, 'f', -1, 64)+"%", strconv.FormatFloat(100-weekLimit(th, a), 'f', -1, 64)+"%"
 	atLeft, whenLeft := i18n.T("tui.next_at_left", five, week), i18n.T("tui.next_when_left", five, week)
 	if a.NoFiveHourLimit {
 		atLeft, whenLeft = i18n.T("tui.next_at_week_left", week), i18n.T("tui.next_when_week_left", week)
@@ -597,6 +608,7 @@ func (m *Model) helpBox(w int) []string {
 		{"s", i18n.T("tui.help_strategy")},
 		{"r", i18n.T("tui.help_check")},
 		{"t", i18n.T("tui.help_token")},
+		{"w", i18n.T("tui.help_weekly")},
 		{"l", i18n.T("tui.help_login")},
 		{"?  esc", i18n.T("tui.close_help")},
 		{"q", i18n.T("tui.quit")},
@@ -675,6 +687,12 @@ func (m *Model) render() string {
 			out = append(out, m.paint([]seg{{"  " + m.hint, p.crit}}, false))
 		}
 		out = append(out, m.keys(w, [2]string{"enter", i18n.T("tui.log_in")}, [2]string{"esc", i18n.T("tui.cancel")})...)
+	case m.mode == modeWeekly:
+		out = append(out, m.paint([]seg{{"  " + i18n.T("tui.weekly_prompt", m.pending), p.plain}}, false)+m.input.View())
+		if m.hint != "" {
+			out = append(out, m.paint([]seg{{"  " + m.hint, p.crit}}, false))
+		}
+		out = append(out, m.keys(w, [2]string{"enter", i18n.T("tui.save")}, [2]string{"esc", i18n.T("tui.cancel")})...)
 	case m.down:
 		out = append(out, m.paint([]seg{{"  ✕ " + i18n.T("tui.daemon_not_running"), p.critB}, {i18n.T("tui.run"), p.dim},
 			{"ccswap daemon install", p.plain}, {i18n.T("tui.retrying"), p.dim}}, false))

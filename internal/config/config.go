@@ -275,6 +275,18 @@ func (t Thresholds) Check() error {
 	return nil
 }
 
+func (t Thresholds) WithWeekly(own float64) Thresholds {
+	if own > 0 {
+		t.Weekly = own
+	}
+	return t
+}
+
+// OwnWeeklyOK reports whether own leaves hysteresis room to come back under; 0 follows the global one.
+func OwnWeeklyOK(own, hysteresis float64) bool {
+	return own == 0 || own > hysteresis && own <= 100 // NaN is in no range
+}
+
 // SaveThresholds rewrites the [thresholds] table of config.toml.
 func SaveThresholds(home string, t Thresholds) error {
 	return saveTable(home, "thresholds", map[string]any{

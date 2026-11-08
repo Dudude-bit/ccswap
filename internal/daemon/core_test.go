@@ -147,6 +147,11 @@ func usageAt(h5 float64, reset time.Time) resp {
 		h5, reset.Format(time.RFC3339), t0.Add(72*time.Hour).Format(time.RFC3339))}
 }
 
+func usageWeek(h5, week float64) resp {
+	return resp{200, fmt.Sprintf(`{"five_hour":{"utilization":%v,"resets_at":%q},"seven_day":{"utilization":%v,"resets_at":%q}}`,
+		h5, t0.Add(2*time.Hour).Format(time.RFC3339), week, t0.Add(72*time.Hour).Format(time.RFC3339))}
+}
+
 // usageWeekAt is usage whose weekly window resets at reset; cache-aware orders by it.
 func usageWeekAt(h5 float64, reset time.Time) resp {
 	return resp{200, fmt.Sprintf(`{"five_hour":{"utilization":%v,"resets_at":%q},"seven_day":{"utilization":10,"resets_at":%q}}`,
@@ -1726,6 +1731,98 @@ func TestSetThresholdsSavesAndApplies(t *testing.T) {
 	if err != nil || c.Thresholds != (config.Thresholds{FiveHour: 50, Weekly: 97, Hysteresis: 5, MinDwell: 2 * time.Minute,
 		CheckActive: 5 * time.Minute, CheckOthers: 30 * time.Minute}) {
 		t.Fatal("config.toml", c.Thresholds, err)
+	}
+}
+
+func TestOwnWeeklyThreshold(t *testing.T) {
+	e := newTenv(t)
+	ctx := context.Background()
+	own := func(v float64) api.AccountPatch { return api.AccountPatch{WeeklyThreshold: &v} }
+	e.api.set(func(f *fakeAnthropic) { f.usage["atA"] = usageWeek(10, 86) })
+	e.poll()
+	if v := e.view("a"); v.Exhausted || v.WeeklyThreshold != nil {
+		t.Fatalf("86%% of the week is under the global 98%%: %+v", v)
+	}
+	a, err := e.d.Patch(ctx, "a", own(85))
+	if err != nil || a.WeeklyThreshold == nil || *a.WeeklyThreshold != 85 || !a.Exhausted || *a.ExhaustedReason != "seven_day" {
+		t.Fatal(a, err)
+	}
+	if s, _ := e.st.State().Find("a"); s.WeeklyThreshold != 85 {
+		t.Fatal("not saved", s)
+	}
+	if a, err := e.d.Patch(ctx, "a", own(0)); err != nil || a.WeeklyThreshold != nil || a.Exhausted {
+		t.Fatal("0 must follow the global threshold again", a, err)
+	}
+	for _, v := range []float64{10, 5, -1, 100.5, math.NaN()} {
+		if _, err := e.d.Patch(ctx, "a", own(v)); !errors.Is(err, ErrInvalidThresholds) {
+			t.Errorf("%v: %v", v, err)
+		}
+	}
+	if _, err := e.d.Patch(ctx, "a", own(100)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.d.SetThresholds(ctx, api.Thresholds{FiveHour: 95, SevenDay: 98, Hysteresis: 50,
+		CheckActiveSeconds: 300, CheckOthersSeconds: 1800}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.d.Patch(ctx, "a", own(50)); !errors.Is(err, ErrInvalidThresholds) {
+		t.Fatal("an own threshold at the hysteresis leaves no room to come back", err)
+	}
+	if _, err := e.d.Patch(ctx, "b", own(60)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.d.SetThresholds(ctx, api.Thresholds{FiveHour: 95, SevenDay: 98, Hysteresis: 60,
+		CheckActiveSeconds: 300, CheckOthersSeconds: 1800}); !errors.Is(err, ErrInvalidThresholds) {
+		t.Fatal("hysteresis at b's own threshold", err)
+	}
+}
+
+func TestOwnWeeklyThresholdNowhereToGo(t *testing.T) {
+	e := newTenv(t)
+	ctx := context.Background()
+	v := 85.0
+	if _, err := e.d.Patch(ctx, "a", api.AccountPatch{WeeklyThreshold: &v}); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	if _, err := e.d.Patch(ctx, "b", api.AccountPatch{Enabled: &off}); err != nil {
+		t.Fatal(err)
+	}
+	e.api.set(func(f *fakeAnthropic) { f.usage["atA"] = usageWeek(10, 86) })
+	e.poll()
+	want := note("daemon.own_weekly_no_other", "a")
+	e.msgs(want)
+	zero := 0.0
+	if _, err := e.d.Patch(ctx, "a", api.AccountPatch{WeeklyThreshold: &zero}); err != nil {
+		t.Fatal(err)
+	}
+	e.clk.Add(time.Minute)
+	e.poll()
+	if _, err := e.d.Patch(ctx, "a", api.AccountPatch{WeeklyThreshold: &v}); err != nil {
+		t.Fatal(err)
+	}
+	e.clk.Add(time.Minute)
+	e.poll()
+	e.msgs(want, want)
+}
+
+func TestPatchWithoutWeeklyTakesNoConfigLock(t *testing.T) {
+	e := newTenv(t)
+	e.d.cfgMu.Lock()
+	defer e.d.cfgMu.Unlock()
+	done := make(chan error, 1)
+	p := 5
+	go func() {
+		_, err := e.d.Patch(context.Background(), "b", api.AccountPatch{Priority: &p})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a priority change waited on a config.toml rewrite")
 	}
 }
 

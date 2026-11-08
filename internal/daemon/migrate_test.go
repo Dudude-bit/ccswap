@@ -59,6 +59,10 @@ func jsonEqual(t *testing.T, a, b []byte) bool {
 func TestExportPacksAndFreezes(t *testing.T) {
 	e := newTenv(t)
 	ctx := context.Background()
+	own := 85.0
+	if _, err := e.d.Patch(ctx, "b", api.AccountPatch{WeeklyThreshold: &own}); err != nil {
+		t.Fatal(err)
+	}
 	x, err := e.d.MigrateExport(ctx, []string{"b", "b"})
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +75,7 @@ func TestExportPacksAndFreezes(t *testing.T) {
 		t.Fatal(accts, err)
 	}
 	vault, _ := e.kc.Get(store.VaultService, "b")
-	if a := accts[0]; a.Name != "b" || a.Email != "b@x" || a.Priority != 10 || !a.Enabled ||
+	if a := accts[0]; a.Name != "b" || a.Email != "b@x" || a.Priority != 10 || !a.Enabled || a.WeeklyThreshold != 85 ||
 		!jsonEqual(t, a.Credentials, vault) || !jsonEqual(t, a.OAuthAccount, []byte(`{"emailAddress":"b@x"}`)) {
 		t.Fatalf("%+v", a)
 	}
@@ -491,13 +495,15 @@ func TestImportAddsAndRefreshes(t *testing.T) {
 	e.api.set(func(f *fakeAnthropic) {
 		f.refresh["rC"] = resp{200, `{"access_token":"atC2","refresh_token":"rC2","expires_in":28800}`}
 	})
-	bundle, code := seal(t, macct("c", "c@x", "rC", 7))
+	c := macct("c", "c@x", "rC", 7)
+	c.WeeklyThreshold = 85
+	bundle, code := seal(t, c)
 	x, err := e.migrateImport(bundle, code, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	a := e.account("c")
-	if a.Email != "c@x" || a.Priority != 7 || !a.Enabled || a.NeedsLogin || a.AuthIndex != store.AuthIndex("c") ||
+	if a.Email != "c@x" || a.Priority != 7 || !a.Enabled || a.NeedsLogin || a.AuthIndex != store.AuthIndex("c") || a.WeeklyThreshold != 85 ||
 		!jsonEqual(t, a.OAuthAccount, []byte(`{"emailAddress":"c@x"}`)) {
 		t.Fatalf("%+v", a)
 	}
@@ -723,6 +729,64 @@ func TestImportReplaceRenames(t *testing.T) {
 	e.d.mu.Unlock()
 	if e.account("c").Email != "b@x" || u != nil {
 		t.Fatal("c must take b's place, b's usage dropped")
+	}
+}
+
+func TestImportReplaceKeepsOwnWeekly(t *testing.T) {
+	e := newTenv(t)
+	e.api.set(func(f *fakeAnthropic) {
+		f.refresh["rB9"] = resp{200, `{"access_token":"atB10","refresh_token":"rB10","expires_in":28800}`}
+	})
+	own := 85.0
+	if _, err := e.d.Patch(context.Background(), "b", api.AccountPatch{WeeklyThreshold: &own}); err != nil {
+		t.Fatal(err)
+	}
+	bundle, c := seal(t, macct("b", "b@x", "rB9", 3))
+	if _, err := e.migrateImport(bundle, c, true); err != nil {
+		t.Fatal(err)
+	}
+	if b := e.account("b"); b.Priority != 3 || b.WeeklyThreshold != 85 {
+		t.Fatalf("a bundle without one keeps the threshold set here: %+v", b)
+	}
+}
+
+func TestImportRefusesOwnWeeklyUnderHysteresis(t *testing.T) {
+	e := newTenv(t)
+	for _, v := range []float64{5, 10, 101} {
+		a := macct("c", "c@x", "rC", 7)
+		a.WeeklyThreshold = v
+		bundle, c := seal(t, a)
+		done := e.untouched()
+		if _, err := e.migrateImport(bundle, c, false); !errors.Is(err, ErrInvalidThresholds) {
+			t.Fatal(v, err)
+		}
+		done()
+	}
+}
+
+func TestImportChecksThresholdsUnderTheConfigLock(t *testing.T) {
+	e := newTenv(t)
+	e.api.set(func(f *fakeAnthropic) {
+		f.refresh["rC"] = resp{200, `{"access_token":"atC2","refresh_token":"rC2","expires_in":28800}`}
+	})
+	a := macct("c", "c@x", "rC", 7)
+	a.WeeklyThreshold = 85
+	bundle, c := seal(t, a)
+	e.d.cfgMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.migrateImport(bundle, c, false)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		e.d.cfgMu.Unlock()
+		t.Fatal("imported while a config.toml rewrite could change the hysteresis", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	e.d.cfgMu.Unlock()
+	if err := <-done; err != nil || e.account("c").WeeklyThreshold != 85 {
+		t.Fatal(err, e.account("c"))
 	}
 }
 

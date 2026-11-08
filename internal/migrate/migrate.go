@@ -46,12 +46,13 @@ var (
 // Account is one migrated account. Credentials is the vault form
 // {"claudeAiOauth":{...}}, preserved semantically (JSON is compacted).
 type Account struct {
-	Name         string          `json:"name"`
-	Email        string          `json:"email"`
-	Priority     int             `json:"priority"`
-	Enabled      bool            `json:"enabled"`
-	OAuthAccount json.RawMessage `json:"oauth_account,omitempty"`
-	Credentials  json.RawMessage `json:"credentials"`
+	Name            string          `json:"name"`
+	Email           string          `json:"email"`
+	Priority        int             `json:"priority"`
+	Enabled         bool            `json:"enabled"`
+	OAuthAccount    json.RawMessage `json:"oauth_account,omitempty"`
+	Credentials     json.RawMessage `json:"credentials"`
+	WeeklyThreshold float64         `json:"weekly_threshold,omitempty"`
 }
 
 type payload struct {

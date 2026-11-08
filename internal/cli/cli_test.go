@@ -40,6 +40,7 @@ type fake struct {
 	dirThere bool
 	force    bool
 	removed  string
+	patched  api.AccountPatch
 	strategy api.Strategy
 	lang     *string
 	remote   api.RemoteRequest
@@ -50,6 +51,8 @@ type fake struct {
 	update   *api.Release // Status.Update
 	adminURL *string      // Status.AdminUrl
 	bin      string       // the binary the daemon runs, which Restart restarts on
+	selfUp   string       // the release InstallUpdate puts the daemon on
+	selfErr  error        // InstallUpdate's refusal
 	err      error
 	delay    time.Duration // Status and Activate answer this late
 
@@ -81,6 +84,8 @@ func (f *fake) migrateCalls() string {
 
 func (f *fake) Status(context.Context) (api.Status, error) {
 	time.Sleep(f.delay)
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return api.Status{Active: "work", Auto: true, Strategy: api.CacheAware, TargetService: "Claude Code-credentials",
 		Thresholds: api.Thresholds{FiveHour: 95, SevenDay: 98}, UnknownActive: true, Listen: f.listen, AdminUrl: f.adminURL, Version: f.version, Update: f.update}, f.err
 }
@@ -94,7 +99,8 @@ func (f *fake) Import(_ context.Context, r api.ImportRequest) (api.Account, erro
 func (f *fake) Adopt(_ context.Context, r api.AdoptRequest) (api.Account, error) {
 	return api.Account{Name: r.Name}, f.err
 }
-func (f *fake) Patch(_ context.Context, n string, _ api.AccountPatch) (api.Account, error) {
+func (f *fake) Patch(_ context.Context, n string, p api.AccountPatch) (api.Account, error) {
+	f.patched = p
 	return api.Account{Name: n}, f.err
 }
 func (f *fake) Remove(_ context.Context, n string) error { f.removed = n; return f.err }
@@ -143,7 +149,14 @@ func (f *fake) WebCode(context.Context) (api.WebCode, error) {
 func (f *fake) UseWebCode(context.Context, string) error { return f.err }
 func (f *fake) Version() string                          { return "test" }
 func (f *fake) InstallUpdate(context.Context) (api.Release, error) {
-	return api.Release{}, f.err
+	f.call("update")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.selfErr != nil {
+		return api.Release{}, f.selfErr
+	}
+	f.version = f.selfUp
+	return api.Release{Version: f.selfUp}, f.err
 }
 func (f *fake) Restart(_ context.Context, bin string) (api.Restart, error) {
 	f.call("restart " + bin)
@@ -284,9 +297,9 @@ func runSplit(t *testing.T, stdin string, args ...string) (stdout, stderr string
 }
 
 func TestListTable(t *testing.T) {
-	reset := time.Now().Add(time.Hour)
+	reset, own := time.Now().Add(time.Hour), 85.0
 	f := &fake{accounts: []api.Account{
-		{Name: "work", Email: "w@x.y", Priority: 1, Enabled: true, Active: true,
+		{Name: "work", Email: "w@x.y", Priority: 1, Enabled: true, Active: true, WeeklyThreshold: &own,
 			FiveHour: &api.Window{Utilization: 42, ResetsAt: &reset}, SevenDay: &api.Window{Utilization: 7}, Models: []api.ModelWindow{}},
 		{Name: "old", Email: "o@x.y", Enabled: true, NeedsLogin: true, Models: []api.ModelWindow{}},
 		{Name: "full", Enabled: false, Exhausted: true, Models: []api.ModelWindow{}},
@@ -310,7 +323,7 @@ func TestListTable(t *testing.T) {
 		t.Fatalf("no 5-hour limit reads apart from no data yet: %q %q\n%s", five(lines[4]), five(lines[2]), out)
 	}
 	if !strings.HasPrefix(lines[1], "▶") || !strings.Contains(lines[1], "42%") || !strings.Contains(lines[1], "7%") ||
-		!strings.Contains(lines[1], reset.Local().Format("15:04")) {
+		!strings.Contains(lines[1], reset.Local().Format("15:04")) || !strings.HasSuffix(lines[1], i18n.T("weekly.leaves_at", own)) {
 		t.Fatalf("active row: %q", lines[1])
 	}
 	if !strings.Contains(lines[2], i18n.T("list.needs_login")) || !strings.Contains(lines[3], i18n.T("list.limit")+", "+i18n.T("list.off")) {
@@ -452,6 +465,26 @@ func TestStatusAndSimpleCommands(t *testing.T) {
 	}
 	if _, err := run(t, "", "auto", "maybe"); err == nil {
 		t.Fatal("auto maybe accepted")
+	}
+}
+
+func TestWeekly(t *testing.T) {
+	f := &fake{}
+	env(t, f)
+	out, err := run(t, "", "weekly", "a", "85%")
+	if err != nil || f.patched.WeeklyThreshold == nil || *f.patched.WeeklyThreshold != 85 ||
+		!strings.Contains(out, i18n.T("weekly.leaves_at", 85.0)) {
+		t.Fatalf("%v %+v %s", err, f.patched, out)
+	}
+	out, err = run(t, "", "weekly", "a", "default")
+	if err != nil || f.patched.WeeklyThreshold == nil || *f.patched.WeeklyThreshold != 0 || !strings.Contains(out, i18n.T("weekly.default")) {
+		t.Fatalf("%v %+v %s", err, f.patched, out)
+	}
+	for _, bad := range []string{"lots", "NaN", "Inf"} {
+		f.patched = api.AccountPatch{}
+		if _, err := run(t, "", "weekly", "a", bad); err == nil || f.patched.WeeklyThreshold != nil {
+			t.Errorf("%s: %v %+v", bad, err, f.patched)
+		}
 	}
 }
 

@@ -318,7 +318,9 @@ stops the daemon even when an update is in place by then.
 
 `ccswap update` installs over its own binary the same way, then asks the daemon over the socket
 (`POST /v1/restart`, with that binary's path) to restart on it. A daemon that runs that path restarts as
-above; one that runs another binary carries on, and `ccswap update` says which binary to update. Neither
+above. One that runs another binary carries on, and `ccswap update` then asks it for `POST /v1/update`, as
+the page's Update does, unless it runs the release already; it asks the same when this ccswap is on the
+newest release but a daemon on another binary is not. Neither
 path touches the service or the hook, which already point at that path: the environment the service was
 installed with, such as a proxy, stays.
 

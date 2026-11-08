@@ -183,8 +183,9 @@ runs here and reports the release's version, and puts it in place with one renam
 same file then restarts on it in its own process, as after the page's Update; the service, its proxy and
 locale settings, and the hook stay as they are, so what `ccswap daemon install` copies from your shell,
 such as the `PATH` a login from the page needs, still reaches the service only through `ccswap daemon
-install`. A daemon that runs another ccswap is left alone, and
-`ccswap update` names the binary to update instead. `ccswap update --check` only says
+install`. A daemon that runs another ccswap is updated too: `ccswap update` asks it to install the
+release over its own binary and restart on it, as the page's Update does, even when the ccswap you run
+is on the newest release already. `ccswap update --check` only says
 whether a newer release is out. The daemon checks for one on its own (see
 [What ccswap asks GitHub](#terms-of-use)): `ccswap status` and the web page then say so, and the page
 has an Update button. A build without a version, such as `make install` from a checkout without tags,
@@ -245,6 +246,7 @@ ccswap auto on
 | `ccswap list [--json]` (alias `ls`) | Accounts, their limits and resets |
 | `ccswap status` | The account in use, auto-switch, thresholds, where Claude Code's login is, the last check |
 | `ccswap priority <name> <N>` | Set an account's priority |
+| `ccswap weekly <name> <percent\|default>` | Give an account its own weekly threshold in place of `weekly`, or follow `weekly` again |
 | `ccswap enable <name>` / `disable <name>` | Put an account back into auto-switching, or leave it out |
 | `ccswap auto on\|off` | Turn auto-switching on or off |
 | `ccswap strategy [fill-first\|cache-aware]` | Show or set the order of automatic switches |
@@ -279,7 +281,8 @@ does not know, add it with `ccswap adopt <name>` first.
 - 95% of its 5-hour window (`five_hour`), on a plan that has one: Anthropic's answer has no such window
   for a verified Ultra, so only the weekly limits count, the page and `ccswap tui` show "no limit" there,
   and `ccswap list` "none" in its 5H column,
-- 98% of its weekly window, or of a per-model weekly window such as Sonnet's (`weekly`),
+- 98% of its weekly window, or of a per-model weekly window such as Sonnet's (`weekly`, or the account's
+  own weekly threshold, see below),
 - or when a session stops on a usage limit: the hook reports it, and the account counts as at its limit
   for an hour, or until the window the message names resets if that comes sooner (for a message that names
   none, the first window at 80% or more to reset), unless fresh numbers show that limit under 80% (then the
@@ -292,6 +295,16 @@ fresh enough to trust, and under its thresholds. A higher priority comes first; 
 **When it comes back.** A higher-priority account is taken back once each of its windows is
 `hysteresis` (10) points under its threshold, for example under 85% of its 5-hour window.
 
+**An account's own weekly threshold.** `ccswap weekly <name> 85` (`w` in the TUI, the Leaves at column
+on the page) leaves that account at 85% of its weekly and per-model weekly windows in place of `weekly`,
+so the rest of its week stays with whoever uses it by hand. Past it, ccswap never waits on that account
+when every account is at its limit: it moves to another account at its limit, even one that frees up
+later, as an account ccswap waits on is still spent. If the account in use is past its own threshold and
+no other can take over, ccswap stays, as it only swaps logins, and says so once. The threshold counts
+the account's whole use, its owner's included, and the account may pass it a little before the next
+check (every `check_active`) notices. `ccswap weekly <name> default` follows `weekly` again. The
+threshold is kept in `state.json` on each machine and moves with the account in `ccswap migrate`.
+
 **Other rules.**
 
 - At least `min_dwell` (10 minutes) between automatic switches, unless the account in use has run out.
@@ -303,8 +316,8 @@ fresh enough to trust, and under its thresholds. A higher priority comes first; 
 - The hook ignores sessions that do not use the login ccswap switches: those started with
   `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_BASE_URL`, or with
   a `CLAUDE_CONFIG_DIR` other than ccswap's.
-- When every account is at its limit, ccswap stays, or moves to the account that frees up first, and
-  says when that is.
+- When every account is at its limit, ccswap stays, or moves to the account that frees up first (never
+  one past its own weekly threshold), and says when that is.
 - If Claude Code has not run for a while, its token has expired and ccswap does not switch away from it
   until Claude Code refreshes it: send any message in `claude`.
 - Notifications: on macOS a notification for each switch, a login that needs renewing, and all accounts
@@ -350,7 +363,7 @@ with `ccswap strategy cache-aware`, `s` in the TUI or on the page; it is kept in
 limits and resets, and a rota of the last day and the next hours: who held Claude Code and when, the
 account in use and, at its pace over the last hour, when it is expected to reach a threshold. The
 account auto-switch moves to then is marked Next, chosen by the same rule as the switch itself. From the
-page you can change priorities, which accounts auto-switch may use, auto-switch itself, the strategy,
+page you can change priorities, each account's own weekly threshold, which accounts auto-switch may use, auto-switch itself, the strategy,
 and the thresholds and check intervals (written to `config.toml`, whose comments are not kept, and used
 from the next check). You can also switch accounts. The Login · token column shows when each login ends
 (in red within three days) and until when its token lasts; its button gets an account a new token now,
@@ -431,6 +444,7 @@ keeps your choice on that device.
 | `enter` | switch to it (asks `y`/`n` when Claude Code's token is about to refresh) |
 | `space` | include it in auto-switch or leave it out |
 | `+` `=` / `-` `_` | priority 10 up or down |
+| `w` | its own weekly threshold (asks for a %; empty follows `weekly`) |
 | `a` | auto-switch on or off |
 | `s` | strategy: fill-first or cache-aware |
 | `r` | check every account's limits now |
@@ -621,7 +635,7 @@ lang = ""                 # a pinned language (en, ru); ccswap lang sets it; "" 
 check = true              # ask GitHub for the newest ccswap release, a minute after start and every 12 hours
 ```
 
-`hysteresis` must be under both thresholds. The daemon reads `config.toml` when it starts: after
+`hysteresis` must be under both thresholds and every account's own weekly threshold. The daemon reads `config.toml` when it starts: after
 editing it, run `ccswap daemon install` to restart it. The page, `ccswap remote` and `ccswap lang` write
 their keys and apply them at once; such a rewrite drops the file's comments.
 

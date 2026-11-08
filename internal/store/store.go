@@ -37,13 +37,14 @@ func AuthIndex(name string) string {
 }
 
 type Account struct {
-	Name         string          `json:"name"`
-	Email        string          `json:"email"`
-	Priority     int             `json:"priority"`
-	Enabled      bool            `json:"enabled"`
-	NeedsLogin   bool            `json:"needs_login"`
-	OAuthAccount json.RawMessage `json:"oauth_account,omitempty"`
-	AuthIndex    string          `json:"auth_index"`
+	Name            string          `json:"name"`
+	Email           string          `json:"email"`
+	Priority        int             `json:"priority"`
+	Enabled         bool            `json:"enabled"`
+	NeedsLogin      bool            `json:"needs_login"`
+	OAuthAccount    json.RawMessage `json:"oauth_account,omitempty"`
+	AuthIndex       string          `json:"auth_index"`
+	WeeklyThreshold float64         `json:"weekly_threshold,omitempty"`
 }
 
 type State struct {

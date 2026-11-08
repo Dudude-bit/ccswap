@@ -1138,7 +1138,8 @@ func (d *Daemon) UsageRaw(ctx context.Context, name string, maxAge time.Duration
 func (d *Daemon) StoredAccounts() []store.Account { return d.o.Store.State().Accounts }
 
 func stateOf(a store.Account, u *acctUsage) policy.AccountState {
-	s := policy.AccountState{Name: a.Name, Priority: a.Priority, Enabled: a.Enabled, NeedsLogin: a.NeedsLogin}
+	s := policy.AccountState{Name: a.Name, Priority: a.Priority, Enabled: a.Enabled, NeedsLogin: a.NeedsLogin,
+		WeeklyThreshold: a.WeeklyThreshold}
 	if u != nil {
 		s.FiveHour, s.SevenDay, s.Models = u.fiveHour, u.sevenDay, u.models
 		s.LimitHitUntil, s.CheckedAt = u.limitHitUntil, u.checkedAt
@@ -1242,6 +1243,8 @@ func (d *Daemon) stayNotice(st store.State, states []policy.AccountState, holder
 		text, key = i18n.Err("daemon.active_disabled_no_other", holder), "disabled:"+holder
 	case cur.NeedsLogin, unknownOthers(states, holder, d.th(), now):
 		return // the login notice went out already / other accounts' data is unknown
+	case slices.ContainsFunc(states, func(s policy.AccountState) bool { return s.Name == holder && policy.Keeps(s, now) }):
+		text, key = i18n.Err("daemon.own_weekly_no_other", holder), "own:"+holder
 	default:
 		text, key = d.allExhausted(states, holder, now)
 	}
@@ -1483,12 +1486,15 @@ func (d *Daemon) view(st store.State, a store.Account) api.Account {
 	active := a.Name == st.Active && !d.unknown
 	var leaves time.Time
 	if active {
-		leaves = u.leavesAt(d.th(), d.o.Now(), shiftStart(st))
+		leaves = u.leavesAt(d.th().WithWeekly(a.WeeklyThreshold), d.o.Now(), shiftStart(st))
 	}
 	d.mu.Unlock()
 	v := api.Account{Name: a.Name, Email: a.Email, Priority: a.Priority, Enabled: a.Enabled, NeedsLogin: a.NeedsLogin,
 		Active: active, Models: []api.ModelWindow{}, CheckedAt: timePtr(u.checkedAt), LeavesAt: timePtr(leaves),
 		FiveHour: window(u.fiveHour), SevenDay: window(u.sevenDay), NoFiveHourLimit: u.noFiveHour && u.sevenDay != nil}
+	if a.WeeklyThreshold > 0 {
+		v.WeeklyThreshold = &a.WeeklyThreshold
+	}
 	s, now := stateOf(a, &u), d.o.Now()
 	if r := policy.ExhaustedBy(s, d.th(), now); r != "" {
 		v.Exhausted, v.ExhaustedReason, v.LeavesAt = true, &r, nil // leaving already
@@ -1608,10 +1614,20 @@ func (d *Daemon) Adopt(ctx context.Context, r api.AdoptRequest) (api.Account, er
 
 func (d *Daemon) Patch(_ context.Context, name string, p api.AccountPatch) (api.Account, error) {
 	defer d.bus.publish()
+	if p.WeeklyThreshold != nil {
+		d.cfgMu.Lock() // the hysteresis it is checked against holds until it is saved
+		defer d.cfgMu.Unlock()
+	}
 	err := d.o.Switcher.Locked(func() error {
 		return d.o.Store.Update(func(x *store.State) error {
 			for i := range x.Accounts {
 				if x.Accounts[i].Name == name {
+					if p.WeeklyThreshold != nil {
+						if err := ownWeekly(d.th(), name, *p.WeeklyThreshold); err != nil {
+							return err
+						}
+						x.Accounts[i].WeeklyThreshold = *p.WeeklyThreshold
+					}
 					if p.Enabled != nil {
 						x.Accounts[i].Enabled = *p.Enabled
 					}
@@ -1719,6 +1735,13 @@ func (d *Daemon) SetLang(_ context.Context, lang string) error {
 	return nil
 }
 
+func ownWeekly(th config.Thresholds, name string, v float64) error {
+	if !config.OwnWeeklyOK(v, th.Hysteresis) {
+		return fmt.Errorf("%w: %v", ErrInvalidThresholds, i18n.Err("daemon.own_weekly_range", name, th.Hysteresis))
+	}
+	return nil
+}
+
 func thresholdsOf(th config.Thresholds) api.Thresholds {
 	return api.Thresholds{FiveHour: th.FiveHour, SevenDay: th.Weekly, Hysteresis: th.Hysteresis,
 		MinDwellSeconds: int(th.MinDwell / time.Second), CheckActiveSeconds: int(th.CheckActive / time.Second),
@@ -1739,6 +1762,12 @@ func (d *Daemon) SetThresholds(_ context.Context, t api.Thresholds) (api.Thresho
 	}
 	d.cfgMu.Lock()
 	defer d.cfgMu.Unlock()
+	for _, a := range d.o.Store.State().Accounts {
+		if !config.OwnWeeklyOK(a.WeeklyThreshold, th.Hysteresis) {
+			return api.Thresholds{}, fmt.Errorf("%w: %v", ErrInvalidThresholds,
+				i18n.Err("daemon.hysteresis_over_own_weekly", a.Name, a.WeeklyThreshold))
+		}
+	}
 	if err := config.SaveThresholds(d.o.Home, th); err != nil {
 		return api.Thresholds{}, err
 	}

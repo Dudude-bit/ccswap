@@ -41,7 +41,10 @@ func newUpdateCmd() *cobra.Command {
 				return i18n.Err("update.not_release", version, rel.Version)
 			case !update.Newer(rel.Version, version):
 				fmt.Fprintf(out, i18n.T("update.latest"), version)
-				return nil
+				if check {
+					return nil
+				}
+				return catchUp(cmd, rel.Version)
 			case check:
 				fmt.Fprintf(out, i18n.T("update.available"), rel.Version, version, rel.URL)
 				return nil
@@ -64,8 +67,9 @@ func newUpdateCmd() *cobra.Command {
 	return c
 }
 
-// restartDaemon puts a daemon that runs bin on the new release as the page's Update does: it restarts in its
-// own process, and its service and the hook stay as they are. A daemon that runs another binary is left alone.
+// restartDaemon puts the daemon on the new release as the page's Update does: it restarts in its own process,
+// and its service and the hook stay as they are. A daemon that runs another binary installs the release over
+// that one first.
 func restartDaemon(cmd *cobra.Command, bin, version string) error {
 	out := cmd.OutOrStdout()
 	cl, err := client()
@@ -96,10 +100,65 @@ func restartDaemon(cmd *cobra.Command, bin, version string) error {
 		return waitDaemon(cmd, cl, version)
 	case r.JSON200.Bin == "":
 		fmt.Fprintf(out, i18n.T("update.restart_daemon"), version)
-	default:
-		fmt.Fprintf(out, i18n.T("update.other_daemon"), r.JSON200.Bin)
+		return nil
 	}
-	return nil
+	return updateOther(cmd, cl, r.JSON200.Bin, version)
+}
+
+// catchUp puts a daemon that runs a release older than version on it when this ccswap has nothing to install:
+// a ccswap update from before this one left a daemon on another binary as it was.
+func catchUp(cmd *cobra.Command, version string) error {
+	cl, err := client()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := within(cmd, readTimeout)
+	defer cancel()
+	st, err := cl.GetStatusWithResponse(ctx)
+	switch {
+	case errors.Is(down(err), errDown):
+		return nil // no daemon
+	case err != nil:
+		return down(err)
+	case st.JSON200 == nil || !update.Newer(version, st.JSON200.Version):
+		return nil // a daemon on this release, or on no release
+	}
+	bin, err := updateTarget()
+	if err != nil {
+		return err
+	}
+	return restartDaemon(cmd, bin, version)
+}
+
+// updateOther has the daemon on bin, another binary, install the release over it, unless it runs version already.
+func updateOther(cmd *cobra.Command, cl *api.ClientWithResponses, bin, version string) error {
+	ctx, cancel := within(cmd, readTimeout)
+	st, err := cl.GetStatusWithResponse(ctx)
+	cancel()
+	if err == nil && st.JSON200 != nil {
+		switch v := st.JSON200.Version; {
+		case !update.Known(v): // it cannot compare itself with a release: ccswap update cannot update it
+			fmt.Fprintf(cmd.OutOrStdout(), i18n.T("update.other_daemon_unversioned"), bin, v)
+			return nil
+		case !update.Newer(version, v):
+			fmt.Fprintf(cmd.OutOrStdout(), i18n.T("update.other_daemon_current"), bin, v)
+			return nil
+		}
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), i18n.T("update.other_daemon"), bin)
+	ctx, cancel = within(cmd, installTimeout)
+	defer cancel()
+	r, err := cl.InstallUpdateWithResponse(ctx)
+	if err != nil {
+		return i18n.Err("update.other_daemon_failed", bin, down(err))
+	}
+	if err := apiErr(r.StatusCode(), r.Body, "", 200); err != nil {
+		return i18n.Err("update.other_daemon_failed", bin, err)
+	}
+	if r.JSON200 == nil {
+		return errBadResp
+	}
+	return waitDaemon(cmd, cl, r.JSON200.Version)
 }
 
 // waitDaemon waits for the daemon to answer as version once it restarted.

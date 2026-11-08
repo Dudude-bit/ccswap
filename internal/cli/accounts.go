@@ -263,6 +263,9 @@ func stateText(a api.Account) string {
 	if !a.Enabled {
 		s = append(s, i18n.T("list.off"))
 	}
+	if a.WeeklyThreshold != nil {
+		s = append(s, i18n.T("weekly.leaves_at", *a.WeeklyThreshold))
+	}
 	return strings.Join(s, ", ")
 }
 
@@ -393,6 +396,23 @@ func newPriorityCmd() *cobra.Command {
 				return fmt.Errorf(i18n.T("priority.not_number"), args[1])
 			}
 			return patch(cmd, args[0], api.AccountPatch{Priority: &n}, i18n.T("priority.done", args[1]))
+		},
+	}
+}
+
+func newWeeklyCmd() *cobra.Command {
+	return &cobra.Command{
+		Use: i18n.T("weekly.use"), Short: i18n.T("weekly.short"), Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			v, ok := tui.ParseWeekly(args[1])
+			if !ok {
+				return fmt.Errorf(i18n.T("weekly.not_number"), args[1])
+			}
+			done := i18n.T("weekly.default")
+			if v != 0 {
+				done = i18n.T("weekly.leaves_at", v)
+			}
+			return patch(cmd, args[0], api.AccountPatch{WeeklyThreshold: &v}, done)
 		},
 	}
 }
