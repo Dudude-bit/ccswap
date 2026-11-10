@@ -51,6 +51,7 @@ type fake struct {
 	editErr  error
 	tokens   []string
 	weekly   map[string]float64
+	resets   []string // "<name> <left>" of each reset
 }
 
 func (f *fake) Status(context.Context) (api.Status, error) { return f.st, f.statErr }
@@ -92,6 +93,10 @@ func (f *fake) SetWeekly(_ context.Context, name string, v float64) error {
 }
 func (f *fake) RefreshLogin(_ context.Context, name string) error {
 	f.tokens = append(f.tokens, name)
+	return f.editErr
+}
+func (f *fake) UseReset(_ context.Context, name string, left int) error {
+	f.resets = append(f.resets, fmt.Sprintf("%s %d", name, left))
 	return f.editErr
 }
 
@@ -177,7 +182,7 @@ func TestWideViewShowsEveryState(t *testing.T) {
 	v := text(loadedAt(t, f, 100))
 	t.Log("\n" + v)
 	for _, want := range []string{"ccswap", i18n.T("tui.auto") + " " + i18n.T("tui.on"), i18n.T("tui.strategy") + " cache-aware",
-		i18n.T("tui.accounts"), i18n.T("tui.five_hours_left"), i18n.T("tui.col_reset"), "▶ work", "29%", i18n.T("tui.in_hours", 2),
+		i18n.T("tui.accounts") + " · " + i18n.T("tui.left"), i18n.T("tui.five_hours"), i18n.T("tui.col_reset"), "▶ work", "29%", i18n.T("tui.in_hours", 2),
 		"✕ " + i18n.T("tui.out_until", clock(*f.accts[1].FreeAt, time.Now())), "✕ " + i18n.T("tui.needs_login"), i18n.T("tui.disabled"), "▶ " + i18n.T("tui.in_use"),
 		"→ " + i18n.T("tui.next"), "work  " + i18n.T("tui.in_use"), "work@example.com", "↑↓ " + i18n.T("tui.select"),
 		"+ - " + i18n.T("tui.priority"), "? " + i18n.T("tui.all_keys")} {
@@ -191,10 +196,19 @@ func TestWideViewShowsEveryState(t *testing.T) {
 func TestNarrowViewMarksStatesWithoutWords(t *testing.T) {
 	v := text(loadedAt(t, fixture(), 64))
 	t.Log("\n" + v)
-	if strings.Contains(v, i18n.T("tui.needs_login")) {
+	if strings.Contains(v, i18n.T("tui.limit_reached")) || strings.Contains(v, i18n.T("tui.disabled")) {
 		t.Errorf("a narrow table has no state column:\n%s", v)
 	}
-	for _, name := range []string{"home", "side"} {
+	if !regexp.MustCompile(`side +0 +✕ `+i18n.T("tui.needs_login")+` *│`).MatchString(v) || strings.Contains(v, i18n.T("tui.login_key")) {
+		t.Errorf("an account that needs a login says so in place of its numbers, the key only when selected:\n%s", v)
+	}
+	if !regexp.MustCompile(`home +0 +\S+ +\d+% +` + i18n.T("tui.out_until_short", clock(*fixture().accts[1].FreeAt, time.Now()))).MatchString(v) {
+		t.Errorf("an account at its limit says until when in place of the window it waits on:\n%s", v)
+	}
+	if !strings.Contains(v, "✕ "+i18n.T("tui.limit_short")) || !strings.Contains(v, "○ "+i18n.T("tui.disabled_short")) {
+		t.Errorf("the legend names the glyphs on screen:\n%s", v)
+	}
+	for _, name := range []string{"home"} {
 		if !regexp.MustCompile(name + `.*✕`).MatchString(v) {
 			t.Errorf("%s has no state glyph:\n%s", name, v)
 		}
@@ -454,7 +468,7 @@ func TestWeeklyKeySetsTheOwnThreshold(t *testing.T) {
 	f := fixture()
 	m := loaded(t, f)
 	m, _ = send(m, key("w"))
-	if !strings.Contains(text(m), i18n.T("tui.weekly_prompt", "work")) {
+	if !strings.Contains(text(m), i18n.T("tui.weekly_prompt", "work", "98%")) {
 		t.Fatalf("no prompt:\n%s", text(m))
 	}
 	m, cmd := send(typed(m, "lots"), key("enter"))
@@ -463,7 +477,7 @@ func TestWeeklyKeySetsTheOwnThreshold(t *testing.T) {
 	}
 	m, cmd = send(typed(erased(m, 4), "250"), key("enter"))
 	if cmd != nil || f.weekly != nil || m.(*Model).accts[0].WeeklyThreshold != nil ||
-		!strings.Contains(text(m), i18n.T("daemon.own_weekly_range", "work", 0.0)) {
+		!strings.Contains(strings.Join(strings.Fields(text(m)), " "), i18n.T("daemon.own_weekly_range", "work", 0.0)) {
 		t.Fatalf("250%% must not be sent nor shown: %v\n%s", f.weekly, text(m))
 	}
 	m, cmd = send(typed(erased(m, 3), "85"), key("enter"))
@@ -551,7 +565,7 @@ func TestDaemonDownKeepsDataAndEmptyState(t *testing.T) {
 	m := loaded(t, f)
 	m, _ = send(m, dataMsg{err: ErrDown})
 	v := text(m)
-	if !strings.Contains(v, i18n.T("tui.daemon_not_running")) || !strings.Contains(v, i18n.T("tui.daemon_not_responding")) ||
+	if !strings.Contains(v, "ccswap daemon install") || !strings.Contains(v, i18n.T("tui.daemon_not_responding")) ||
 		!strings.Contains(v, "work") || !strings.Contains(v, i18n.T("tui.data_from", "")) {
 		t.Fatalf("down view must keep last data:\n%s", v)
 	}
@@ -635,9 +649,9 @@ func TestEnglishScreen(t *testing.T) {
 	english(t)
 	m := loadedAt(t, fixture(), 100)
 	v := text(m)
-	for _, want := range []string{"auto on", "strategy cache-aware", "Accounts", "5 hours, left", "week, left", "reset",
+	for _, want := range []string{"auto on", "strategy cache-aware", "Accounts · left", "5 hours", "week", "reset",
 		"in 2h", "✕ out until", "✕ needs login", "disabled", "▶ in use", "→ next", "work  in use",
-		"↑↓ select", "enter use", "+ - priority", "space on/off", "? all keys", "q quit"} {
+		"↑↓ select", "enter use", "+ - priority", "space on/off", "? help", "q quit"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("view lacks %q:\n%s", want, v)
 		}
@@ -688,5 +702,143 @@ func TestEnglishErrorsAndResetText(t *testing.T) {
 	}
 	if g := ResetText(api.Account{}, now); g != "-" {
 		t.Error(g)
+	}
+}
+
+func TestNeedsLoginReplacesTheNumbers(t *testing.T) {
+	f := fixture()
+	f.accts[2].FiveHour, f.accts[2].SevenDay = win(30, time.Now().Add(time.Hour)), win(40, time.Now().Add(time.Hour)) // from before the login went
+	v := text(loadedAt(t, f, 100))
+	if !regexp.MustCompile(`side +0 +✕ `+i18n.T("tui.needs_login")+` *│`).MatchString(v) || strings.Contains(v, "70%") {
+		t.Fatalf("the row asks for the login, its old numbers gone:\n%s", v)
+	}
+}
+
+func TestLoginKeyLogsTheSelectedAccountInAgain(t *testing.T) {
+	f := fixture()
+	m := loaded(t, f)
+	var got *exec.Cmd
+	m.(*Model).execProc = func(c *exec.Cmd, _ tea.ExecCallback) tea.Cmd { got = c; return func() tea.Msg { return nil } }
+	m, _ = send(m, key("down"))
+	m, _ = send(m, key("down")) // side, which needs a login
+	if v := text(m); !strings.Contains(v, "l "+i18n.T("tui.log_in_again")) {
+		t.Fatalf("the keys offer the login:\n%s", v)
+	}
+	m, _ = send(m, key("l"))
+	if v := text(m); !strings.Contains(v, i18n.T("tui.relogin_name")+"side") {
+		t.Fatalf("the prompt holds its name:\n%s", v)
+	}
+	if _, cmd := send(m, key("enter")); cmd == nil || got == nil || strings.Join(got.Args[1:], " ") != "login side" {
+		t.Fatalf("%v", got)
+	}
+}
+
+func TestResetCreditsShowAndSpend(t *testing.T) {
+	f := fixture()
+	ends := time.Now().Add(40 * 24 * time.Hour)
+	f.accts[1].Resets = &api.Resets{Left: 2, Credit: "launch", EndsAt: &ends} // home, at its limit
+	f.accts[1].FiveHour.Utilization = 100
+	f.accts[0].Resets = &api.Resets{Left: 1, Credit: "launch"} // work, which is not
+	m := loadedAt(t, f, 100)
+	v := text(m)
+	if !strings.Contains(v, "home ↺2") || !strings.Contains(v, "work ↺1") || !strings.Contains(v, "↺ "+i18n.T("tui.reset_credits_legend")) {
+		t.Fatalf("the table marks the credits:\n%s", v)
+	}
+	m, _ = send(m, key("down"))
+	v = text(m)
+	if !strings.Contains(v, "↺ "+i18n.N("tui.reset_credits", 2)+", "+i18n.N("tui.credit_ends", 2, date(ends, time.Now()))) || !strings.Contains(v, "R "+i18n.T("tui.reset_limits")) {
+		t.Fatalf("the panel and the keys show them:\n%s", v)
+	}
+	m, _ = send(m, key("R"))
+	v = text(m)
+	ask := i18n.T("tui.reset_ask", "home") + " " + i18n.T("tui.reset_gain", clock(*f.accts[1].FreeAt, time.Now())) + " " + i18n.N("tui.reset_spends", 2)
+	if !strings.Contains(strings.Join(strings.Fields(v), " "), ask) || strings.Contains(v, "! home") {
+		t.Fatalf("a reset asks first:\n%s", v)
+	}
+	m, _ = send(m, key("n"))
+	if len(f.resets) != 0 || m.(*Model).mode != modeList {
+		t.Fatal("no spends nothing", f.resets)
+	}
+	m, _ = send(m, key("R"))
+	m, cmd := send(m, key("y"))
+	m = run(t, m, cmd)
+	if !slices.Equal(f.resets, []string{"home 2"}) || !strings.Contains(text(m), i18n.T("tui.limits_reset", "home")) {
+		t.Fatalf("%v\n%s", f.resets, text(m))
+	}
+	m, _ = send(m, key("k")) // work: 80% of its week left
+	m, _ = send(m, key("R"))
+	if v := strings.Join(strings.Fields(text(m)), " "); !strings.Contains(v, i18n.T("tui.reset_not_limited", "work", i18n.T("tui.of_five", "71%"))) {
+		t.Fatalf("a reset short of a limit says what it throws away:\n%s", v)
+	}
+	m, _ = send(m, key("esc"))
+	m, _ = send(m, key("j"))
+	m, _ = send(m, key("j")) // side has none
+	m, _ = send(m, key("R"))
+	if m.(*Model).mode != modeList || !strings.Contains(text(m), i18n.T("tui.no_reset_credits", "side")) {
+		t.Fatalf("no credit, no prompt:\n%s", text(m))
+	}
+	fits(t, text(m), 100)
+}
+
+func TestShortTerminalKeepsThePromptAndKeys(t *testing.T) {
+	f := fixture()
+	f.accts[1].Resets = &api.Resets{Left: 2, Credit: "launch"}
+	m := loadedAt(t, f, 56)
+	m, _ = send(m, tea.WindowSizeMsg{Width: 56, Height: 16}) // a phone with its keyboard up
+	m, _ = send(m, key("down"))
+	m, _ = send(m, key("R"))
+	v := text(m)
+	if n := strings.Count(v, "\n"); n > 16 {
+		t.Fatalf("%d lines on a 16-line terminal:\n%s", n, v)
+	}
+	if !strings.Contains(v, i18n.T("tui.reset_ask", "home")) || !strings.Contains(v, "y "+i18n.T("tui.reset_yes")) || !strings.Contains(v, "▌   home") {
+		t.Fatalf("the prompt, its keys and the selected row show:\n%s", v)
+	}
+}
+
+func TestTinyTerminalScrollsTheTable(t *testing.T) {
+	m := loadedAt(t, fixture(), 80)
+	m, _ = send(m, tea.WindowSizeMsg{Width: 80, Height: 9})
+	for range 3 {
+		m, _ = send(m, key("down"))
+	}
+	v := text(m)
+	if n := strings.Count(v, "\n"); n > 9 || !strings.Contains(v, "old") || strings.Contains(v, " work ") ||
+		!strings.Contains(v, i18n.T("tui.more_rows", "↑ 1")) {
+		t.Fatalf("the table scrolls to the selected account and counts the rest:\n%s", v)
+	}
+}
+
+func TestHelpPagesOnAShortTerminal(t *testing.T) {
+	m := loadedAt(t, fixture(), 80)
+	m, _ = send(m, tea.WindowSizeMsg{Width: 80, Height: 12})
+	m, _ = send(m, key("?"))
+	v := text(m)
+	if n := strings.Count(v, "\n"); n > 12 || !strings.Contains(v, i18n.T("tui.help_select")) || !strings.Contains(v, i18n.T("tui.more_rows", "")) {
+		t.Fatalf("help fits the screen from its top:\n%s", v)
+	}
+	if !strings.Contains(v, "↑↓ "+i18n.T("tui.scroll")) {
+		t.Fatalf("paged help offers scrolling:\n%s", v)
+	}
+	m, _ = send(m, key("down"))
+	lines := strings.Split(text(m), "\n")
+	for i, l := range lines {
+		if strings.Contains(l, i18n.T("tui.keys")) && i+1 < len(lines) && strings.HasPrefix(strings.TrimPrefix(lines[i+1], "│ "), " ") {
+			t.Fatalf("a help page opens on a key:\n%s", text(m))
+		}
+	}
+	for range 20 {
+		m, _ = send(m, key("down"))
+	}
+	if v := text(m); strings.Contains(v, i18n.T("tui.help_select")) || !strings.Contains(v, i18n.T("tui.close_help")) || strings.Contains(v, "↓") && !strings.Contains(v, "↑↓") {
+		t.Fatalf("down pages to its end:\n%s", v)
+	}
+	m, _ = send(m, key("esc"))
+	if m.(*Model).help {
+		t.Fatal("esc closes help")
+	}
+	m, _ = send(m, tea.WindowSizeMsg{Width: 80, Height: 60})
+	if m, _ = send(m, key("?")); strings.Contains(text(m), "↑↓ "+i18n.T("tui.scroll")) {
+		t.Fatalf("help that fits offers no scrolling:\n%s", text(m))
 	}
 }

@@ -69,7 +69,8 @@ it is visible in the process list for a moment. Claude Code writes its own item 
 
 ## Network
 
-ccswap talks to Anthropic: `api.anthropic.com` (`/api/oauth/usage` and `/api/oauth/profile`) and
+ccswap talks to Anthropic: `api.anthropic.com` (`/api/oauth/usage`, `/api/oauth/profile`, and
+`/api/organizations/<organization>/reset_rate_limits` when you spend a reset credit) and
 `platform.claude.com` (`/v1/oauth/token`, to refresh logins). It never sends prompts, proxies nothing and
 has no telemetry. With `ccswap remote set` it also asks the other ccswap you name for its limits. For
 updates it asks GitHub: `api.github.com` for the newest release (the daemon every 12 hours unless

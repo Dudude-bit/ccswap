@@ -68,14 +68,17 @@ ccswap adopt work
   Anthropic explicitly permits it) and "bypassing any of our systems or protective measures". We found
   nothing from Anthropic that allows or forbids one person holding several subscriptions. Decide for
   yourself whether your use fits these terms.
-- **What ccswap sends to Anthropic.** No prompts and no model requests: ccswap proxies nothing. Its own
-  requests carry the user agent `ccswap/<version>`:
+- **What ccswap sends to Anthropic.** No prompts and no model requests: ccswap proxies nothing. The usage
+  check and a reset carry the user agent of the `claude` installed here, `claude-cli/<its version>
+  (external, cli)`, as Anthropic offers [reset credits](#reset-credits) only to a recent Claude Code
+  (`ccswap/<version>` when `claude` does not run); its other requests carry `ccswap/<version>`:
 
   | Request | What for | When (defaults) |
   |---|---|---|
-  | `GET https://api.anthropic.com/api/oauth/usage` | an account's 5-hour, weekly and per-model limits | for enabled accounts that do not need a login: the account in use every 5 minutes (`check_active`), every other account every 30 minutes (`check_others`), all of them at once when you ask, except one asked less than a minute ago; after a `429` it waits out `Retry-After` (up to an hour) and asks less often |
+  | `GET https://api.anthropic.com/api/oauth/usage?cedar_ember=1` | an account's 5-hour, weekly and per-model limits, and its reset credits | for enabled accounts that do not need a login: the account in use every 5 minutes (`check_active`), every other account every 30 minutes (`check_others`), all of them at once when you ask, except one asked less than a minute ago; after a `429` it waits out `Retry-After` (up to an hour) and asks less often |
   | `GET https://api.anthropic.com/api/oauth/profile` | the email of a login, to tell which account it is | when you add an account, and when Claude Code holds a login ccswap has not identified yet (for example after Claude Code refreshed it), checked once a minute |
   | `POST https://platform.claude.com/v1/oauth/token` | refreshing the logins of accounts Claude Code is not using, so they stay alive | when an inactive account's access token is less than 10 minutes from expiring, and right after `ccswap migrate import`; never the login Claude Code holds |
+  | `POST https://api.anthropic.com/api/organizations/<organization>/reset_rate_limits` | spending one of an account's reset credits | only when you confirm one in the TUI or on the page, then the usage check of that account once more |
 
   The refresh uses Claude Code's public OAuth client ID, the client `claude auth login` issued those
   logins to. Signing in always goes through Claude Code's own `claude auth login`: ccswap never sees
@@ -92,7 +95,7 @@ ccswap adopt work
   they leave the machine only when you move an account with `ccswap migrate`, in an encrypted bundle.
   `ccswap remote` shares limit numbers, never tokens. There is no telemetry, and nothing goes to the
   authors.
-- **Undocumented interfaces.** The usage and profile endpoints, Claude Code's OAuth client and the way
+- **Undocumented interfaces.** The usage, profile and reset endpoints, Claude Code's OAuth client and the way
   Claude Code stores its login are not public, documented interfaces. Any of them can change without
   notice and break ccswap.
 - **Storing and using your OAuth tokens.** The
@@ -357,6 +360,18 @@ with `ccswap strategy cache-aware`, `s` in the TUI or on the page; it is kept in
 - An account's numbers count for about two of its intervals, longer while a `429` keeps ccswap from
   asking (an hour more at most). An account whose numbers are older is never switched to.
 
+### Reset credits
+
+Anthropic sometimes gives an account reset credits, such as one at a model launch: spending one clears the
+account's usage limits at once, the reset Claude Code offers at a limit. ccswap reads them with each usage
+check, asking as the `claude` installed here (Anthropic offers them only to a recent Claude Code), and shows
+them as `↺` and their count, beside the account's name in the TUI and beside its state on the page. `R` in the TUI and the
+`↺` button on the page spend one after you confirm, on any account, not only the one in use; the daemon
+then asks that account's limits again. When every account is at its limit, the page's alert names an
+account that has a credit and offers Reset. A credit is spent only at the count you saw: a second click,
+or another page, is told the count changed instead of spending another, and trying again after a lost
+answer is safe. ccswap never spends one on its own.
+
 ## Web page
 
 `ccswap web` opens the page in your browser; on Linux it prints the link. The page shows each account's
@@ -370,7 +385,8 @@ from the next check). You can also switch accounts. The Login · token column sh
 which also shows whether its login still works. Once a login is close to its end or gone, the button is
 Log in instead: the daemon runs `claude auth login`, the page shows its sign-in link, and you paste back
 the code Claude shows after you sign in (on the daemon's machine, signing in in the tab claude opens is
-enough). Updates arrive as they happen (server-sent events from
+enough). An account with [reset credits](#reset-credits) shows `↺` and their count beside its state; with
+the admin key it is a button that spends one. Updates arrive as they happen (server-sent events from
 `GET /v1/events`).
 
 When a newer ccswap release is out, the page says so, with a link to what is new. With the admin key,
@@ -436,7 +452,9 @@ keeps your choice on that device.
 
 ## TUI
 
-`ccswap tui` shows the accounts and their limits in the terminal:
+`ccswap tui` shows the accounts and their limits in the terminal, laid out to its width and height: on a
+short one, such as a phone with its keyboard up, the panel gives way and the table scrolls, while the prompt
+and the keys stay on screen.
 
 | Key | Action |
 |---|---|
@@ -449,8 +467,9 @@ keeps your choice on that device.
 | `s` | strategy: fill-first or cache-aware |
 | `r` | check every account's limits now |
 | `t` | get the selected account a new token now (never the one Claude Code uses) |
-| `l` | log in to a new account (asks for a name) |
-| `?` | help |
+| `R` | spend one of the selected account's [reset credits](#reset-credits): its limits clear at once (asks `y`/`n`) |
+| `l` | log in to a new account (asks for a name), or again to the selected one once its login is gone or ending (its name filled in) |
+| `?` | help (`↑` `↓` scroll it when it does not fit) |
 | `q`, `ctrl+c` | quit |
 
 ## T3 Code
@@ -464,7 +483,8 @@ answers the part of that API T3 Code reads, so T3 Code lists your accounts and t
 2. In T3 Code: Settings → Providers → Usage providers → Add hub.
 
 T3 Code's requests are answered from what ccswap knows and ask Anthropic only for enabled accounts that
-need no login and whose check interval allows it. The key only reads. If T3 Code runs on a server, add
+need no login and whose check interval allows it. The usage they get carries each account's reset
+credits as Anthropic gives them (`cedar_ember`); spending one stays with ccswap. The key only reads. If T3 Code runs on a server, add
 the hub there with the server's `ccswap t3`. Claude Code sessions that T3 Code starts follow ccswap like
 any other, unless their environment sets `CLAUDE_CODE_OAUTH_TOKEN`.
 

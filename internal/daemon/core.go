@@ -98,6 +98,7 @@ type acctUsage struct {
 	fiveHour, sevenDay *anthropic.Window
 	noFiveHour         bool
 	models             []anthropic.ModelWindow
+	resets             []anthropic.ResetCredit // reset credits as of checkedAt, the one spent next first
 	checkedAt          time.Time
 	err                string
 	refreshErr         string // err as a failed refresh set it, which the next refresh that works clears
@@ -130,6 +131,7 @@ type Daemon struct {
 	svc, kcAcct string // Claude Code's entry
 	im          *Importer
 	tick        sync.Mutex    // one tick at a time
+	resetMu     sync.Mutex    // one reset at a time, so a second click sees what the first spent
 	kick        chan struct{} // pending tick request; capacity 1 coalesces
 	thr         atomic.Pointer[config.Thresholds]
 	bus         broadcast  // tells event streams that status or accounts may have changed
@@ -1068,7 +1070,7 @@ func (d *Daemon) fetch(ctx context.Context, name, tok string) (anthropic.UsageRe
 	case res.Status/100 != 2:
 		u.err = i18n.T("daemon.anthropic_answered", res.Status)
 	default:
-		u.fiveHour, u.noFiveHour, u.sevenDay, u.models = res.Usage.FiveHour, res.Usage.NoFiveHour, res.Usage.SevenDay, res.Usage.Models
+		u.fiveHour, u.noFiveHour, u.sevenDay, u.models, u.resets = res.Usage.FiveHour, res.Usage.NoFiveHour, res.Usage.SevenDay, res.Usage.Models, res.Usage.Resets
 		u.checkedAt, u.err = now, ""
 		u.sample()
 		if u.calm++; u.calm >= calmAnswers && u.every > 0 { // probe whether the endpoint eased up
@@ -1510,6 +1512,9 @@ func (d *Daemon) view(st store.State, a store.Account) api.Account {
 	}
 	for _, m := range u.models {
 		v.Models = append(v.Models, api.ModelWindow{Name: m.Name, Utilization: m.Utilization, ResetsAt: timePtr(m.ResetsAt)})
+	}
+	if c := liveCredits(u.resets, now); len(c) > 0 && !a.NeedsLogin {
+		v.Resets = &api.Resets{Left: creditsLeft(c), Credit: c[0].ID, EndsAt: timePtr(c[0].EndsAt)}
 	}
 	return v
 }

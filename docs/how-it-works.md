@@ -164,14 +164,27 @@ ccswap refreshes only the vault logins of accounts Claude Code is not using (pac
 
 ## Usage polling and backoff
 
-The daemon asks `GET https://api.anthropic.com/api/oauth/usage` with the account's access token and the
-header `anthropic-beta: oauth-2025-04-20` (package `anthropic`). It reads `five_hour`, `seven_day`,
-`seven_day_opus`, `seven_day_sonnet`, and the `limits` entries of kind `weekly_scoped` that name a model.
+The daemon asks `GET https://api.anthropic.com/api/oauth/usage?cedar_ember=1` with the account's access
+token and the header `anthropic-beta: oauth-2025-04-20` (package `anthropic`). It reads `five_hour`,
+`seven_day`, `seven_day_opus`, `seven_day_sonnet`, the `limits` entries of kind `weekly_scoped` that name a
+model, and the reset credits in `cedar_ember`: the grants that are not paused, are `usable_now` and have
+`resets_left`, with `next_grant_id` first, and none when it is not `eligible` or names a grant it does not
+list.
 An answer with a `seven_day` and a null `five_hour` means the plan has no 5-hour limit, as a verified Ultra
 has none (`no_five_hour_limit` in the API): a window that has not started is still a window, at 0, and a
 missing or unreadable `five_hour` says nothing of the plan.
-Requests time out after 15 seconds, and at most four accounts are asked at once. Every request carries
-the user agent `ccswap/<version>`.
+Requests time out after 15 seconds, and at most four accounts are asked at once. The usage check carries
+the user agent of the `claude` installed here, `claude-cli/<version> (external, cli)`, its version read
+from `claude --version` once an hour: Anthropic answers `eligible: false` (`cli_version`) to an older
+Claude Code or another agent. Without a version it is `ccswap/<version>`, as for every other request.
+
+A reset (`POST /v1/accounts/{name}/reset`) posts `{"program":"cedar_ember","grant_id":…,"request_id":…}` to
+`/api/organizations/<organizationUuid>/reset_rate_limits`, with the account's access token and the
+organization from its `oauthAccount`. The request id is a hash of the account's email, the grant and the
+count the caller showed, so a retry after a lost answer names the same claim, and Anthropic takes one claim
+per id; the daemon refuses a count other than its own (`reset_changed`), and runs one reset at a time.
+`reset` and `already_used` count as done: the daemon takes one off its count, ends a limit hit's hour, and
+asks the account's usage again before it answers.
 
 - **Which token:** for the account Claude Code holds, the access token in Claude Code's item, read only;
   for the others, their vault copy. An account without a live access token is not asked; for the

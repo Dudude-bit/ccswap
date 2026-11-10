@@ -167,7 +167,7 @@
       </section>
 
       <section id="acct-sec" class="sec" aria-labelledby="acct-h">
-        <div class="sec-head"><h2 id="acct-h" data-t="accts.title"></h2><p class="sec-sub"><span id="acct-count"></span> · <span data-t="accts.order"></span></p></div>
+        <div class="sec-head"><h2 id="acct-h" data-t="accts.title"></h2><p class="sec-sub"><span id="acct-count"></span> · <span data-t="accts.order"></span><span id="acct-rs" hidden> · ↺ <span data-t="accts.resets" data-t-title="accts.resetsTitle"></span></span></p></div>
         <table id="accounts" class="accts">
           <thead>
             <tr>
@@ -283,7 +283,12 @@
   <tbody class="acct">
     <tr class="row">
       <th scope="row" class="c-acct"><span class="chip" aria-hidden="true"></span><span class="acc-who"><b class="nm"></b> <span class="mail"></span></span></th>
-      <td class="c-state"><span class="sw" aria-hidden="true"></span><span class="st"><b></b> <span class="st2"></span></span></td>
+      <td class="c-state">
+        <span class="st">
+          <span class="st1"><span class="sw" aria-hidden="true"></span><b></b><span class="rs-v viewer"></span><button type="button" class="btn rs-go admin" hidden><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 2.64-6.36M3 3v6h6"/></svg><span class="rs-n"></span></button></span>
+          <span class="st2"></span>
+        </span>
+      </td>
       <td class="c-use" data-col="col.five"></td>
       <td class="c-use" data-col="col.week"></td>
       <td class="c-models" data-col="col.models"></td>

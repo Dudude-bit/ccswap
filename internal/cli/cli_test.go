@@ -113,6 +113,9 @@ func (f *fake) Activate(_ context.Context, n string, force bool) (api.Status, er
 func (f *fake) RefreshLogin(_ context.Context, n string) (api.Account, error) {
 	return api.Account{Name: n}, f.err
 }
+func (f *fake) UseReset(_ context.Context, n string, _ int) (api.Account, error) {
+	return api.Account{Name: n}, f.err
+}
 func (f *fake) StartLogin(context.Context, string, bool) (api.LoginLink, error) {
 	return api.LoginLink{}, f.err
 }
