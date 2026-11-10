@@ -46,6 +46,8 @@ type Core interface {
 	Refresh(ctx context.Context) error
 	// RefreshLogin refreshes one account's login in the vault now.
 	RefreshLogin(ctx context.Context, name string) (api.Account, error)
+	// UseReset spends one of an account's reset credits, when it has left of them.
+	UseReset(ctx context.Context, name string, left int) (api.Account, error)
 	// StartLogin runs claude auth login for an account and returns its sign-in link, replacing a link that
 	// waits for its code only with replace; FinishLogin hands the link of an id the code the sign-in showed
 	// and stores the login; CancelLogin drops the link of an id.
@@ -138,6 +140,11 @@ func (s strict) Refresh(ctx context.Context, _ api.RefreshRequestObject) (api.Re
 func (s strict) RefreshLogin(ctx context.Context, r api.RefreshLoginRequestObject) (api.RefreshLoginResponseObject, error) {
 	a, err := s.c.RefreshLogin(ctx, r.Name)
 	return api.RefreshLogin200JSONResponse(a), err
+}
+
+func (s strict) UseReset(ctx context.Context, r api.UseResetRequestObject) (api.UseResetResponseObject, error) {
+	a, err := s.c.UseReset(ctx, r.Name, r.Body.Left)
+	return api.UseReset200JSONResponse(a), err
 }
 
 // StartLogin on the unix socket, the owner's, replaces a link that waits for its code.
@@ -319,6 +326,16 @@ func classify(err error) (int, api.Error) {
 		return 502, api.Error{Code: "login_failed", Message: err.Error()}
 	case errors.Is(err, ErrBadCode):
 		return 403, api.Error{Code: "bad_code", Message: err.Error()}
+	case errors.Is(err, ErrNoResetCredit):
+		return 409, api.Error{Code: "no_reset_credit", Message: err.Error()}
+	case errors.Is(err, ErrResetChanged):
+		return 409, api.Error{Code: "reset_changed", Message: err.Error()}
+	case errors.Is(err, ErrNotLimited):
+		return 409, api.Error{Code: "not_limited", Message: err.Error()}
+	case errors.Is(err, ErrResetCooldown):
+		return 409, api.Error{Code: "reset_cooldown", Message: err.Error()}
+	case errors.As(err, new(resetFailed)):
+		return 502, api.Error{Code: "reset_failed", Message: err.Error()}
 	case errors.Is(err, ErrNoUpdate):
 		return 409, api.Error{Code: "no_update", Message: err.Error()}
 	case errors.Is(err, ErrUpdating):
@@ -361,6 +378,7 @@ var tcpRoutes = map[string]access{
 	"PATCH /v1/accounts/:name":           adminKey,
 	"POST /v1/accounts/:name/activate":   adminKey,
 	"POST /v1/accounts/:name/refresh":    adminKey,
+	"POST /v1/accounts/:name/reset":      adminKey,
 	"POST /v1/accounts/:name/login":      anyKey,
 	"DELETE /v1/accounts/:name/login":    anyKey,
 	"POST /v1/accounts/:name/login/code": anyKey,

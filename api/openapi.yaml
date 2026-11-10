@@ -98,6 +98,26 @@ paths:
         "409": {$ref: "#/components/responses/Error"}
         "500": {$ref: "#/components/responses/Error"}
         "502": {$ref: "#/components/responses/Error"}
+  /v1/accounts/{name}/reset:
+    parameters:
+      - {name: name, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: useReset
+      description: >-
+        Spend one of the account's reset credits (Account.resets): Anthropic clears its usage limits at once, as
+        Claude Code offers at a limit. left is the count the caller showed; another count here refuses it
+        (reset_changed), so a second click elsewhere spends no second credit. A retry of a reset whose answer was
+        lost is safe, as Anthropic takes one claim per credit and count. The answer comes once the account's usage
+        was asked again, so it shows the cleared limits when Anthropic allows the ask.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/UseResetRequest"}}}
+      responses:
+        "200": {description: The account after the reset, content: {application/json: {schema: {$ref: "#/components/schemas/Account"}}}}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
   /v1/accounts/{name}/login:
     parameters:
       - {name: name, in: path, required: true, schema: {type: string}}
@@ -395,6 +415,10 @@ components:
             login_gone (login code: no link of the account with this id waits for a code, as none was started, or it expired,
             was used, was replaced or the daemon restarted), wrong_account (login code: the sign-in was another account's; the link is spent),
             login_pending (login: another link of the account waits for its code, until it is used or its 10 minutes run out),
+            no_reset_credit (reset: the account has no reset credit left, as ccswap last saw or as Anthropic says),
+            reset_changed (reset: the account's reset credits changed since the caller showed them; nothing was spent),
+            not_limited (reset: Anthropic spends this credit only at a limit), reset_cooldown (reset: Anthropic wants a
+            pause between resets; the message says until when, if it said),
             migrate_active (migrate: the account, or its login, is the one Claude Code uses), export_gone (migrate: no such
             export: cancelled, expired, or forgotten by a daemon restart, possibly after its commit landed, so check
             whether the accounts are still here), export_done (migrate cancel: the export is committed already),
@@ -410,7 +434,8 @@ components:
             refused for another reason than a spent login; the daemon tries again on its next tick),
             login_failed (login: claude auth login did not start, gave no link or did not answer the code in time),
             update_failed (update: GitHub failed, the download did not match its checksum, the new binary did not run, or
-            the old one could not be replaced; nothing changed).
+            the old one could not be replaced; nothing changed), reset_failed (reset: Anthropic did not answer, refused
+            the login, asked to slow down or could not confirm the reset; trying again is safe).
         message: {type: string, description: A detail; clients show their own text per code}
     Thresholds:
       type: object
@@ -538,6 +563,23 @@ components:
         models:
           type: array
           items: {$ref: "#/components/schemas/ModelWindow"}
+        resets: {$ref: "#/components/schemas/Resets"}
+    Resets:
+      type: object
+      description: >-
+        The account's reset credits, which /v1/accounts/{name}/reset spends: grants of limit resets Anthropic gave it,
+        such as one at a model launch. Absent when it has none usable now, while it needs a login, and before
+        Anthropic said; Anthropic says only to a recent Claude Code, whose version the daemon sends.
+      required: [left, credit]
+      properties:
+        left: {type: integer, description: Resets the account can spend now, at least 1}
+        credit: {type: string, description: "Anthropic's id of the grant a reset spends next; ccswap remote takes it from here"}
+        ends_at: {type: string, format: date-time, description: When that grant runs out; absent when it does not}
+    UseResetRequest:
+      type: object
+      required: [left]
+      properties:
+        left: {type: integer, description: The resets.left the caller showed}
     ImportRequest:
       type: object
       required: [name, config_dir]

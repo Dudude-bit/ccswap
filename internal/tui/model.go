@@ -34,6 +34,7 @@ const (
 	modeConfirm
 	modeName
 	modeWeekly
+	modeReset
 )
 
 type (
@@ -71,7 +72,8 @@ type Model struct {
 
 	sel     string // selected account name; survives refreshes
 	mode    mode
-	pending string // account awaiting the near_refresh confirmation, or its weekly threshold
+	pending string // account awaiting the near_refresh or reset confirmation, or its weekly threshold
+	left    int    // the reset credits shown when the reset was asked
 	input   textinput.Model
 	hint    string // validation hint under the name prompt
 
@@ -79,6 +81,8 @@ type Model struct {
 	flashErr bool
 	flashSeq int
 	width    int
+	height   int // the terminal's rows; the screen fits them
+	helpTop  int // the first help line shown, when help pages
 
 	execProc func(*exec.Cmd, tea.ExecCallback) tea.Cmd
 }
@@ -182,7 +186,7 @@ func (m *Model) move(d int) {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
+		m.width, m.height = msg.Width, msg.Height
 	case tea.BackgroundColorMsg:
 		m.pal = newPalette(msg.IsDark())
 	case tickMsg:
@@ -259,6 +263,16 @@ func (m *Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.mode, m.pending = modeList, ""
 		}
 		return m, nil
+	case modeReset:
+		name, left := m.pending, m.left
+		switch s {
+		case "y", "Y", "н":
+			m.mode, m.pending = modeList, ""
+			return m, m.act(name, i18n.T("tui.limits_reset", name), false, func(ctx context.Context) error { return m.c.UseReset(ctx, name, left) })
+		case "n", "N", "esc", "т":
+			m.mode, m.pending = modeList, ""
+		}
+		return m, nil
 	case modeName:
 		switch s {
 		case "esc":
@@ -294,16 +308,33 @@ func (m *Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.hint = ""
 		return m, cmd
 	}
-	if m.help && (s == "?" || s == "esc") {
-		m.help = false
-		return m, nil
+	if m.help {
+		switch s {
+		case "?", "esc":
+			m.help = false
+			return m, nil
+		case "up", "k":
+			starts := m.helpStarts(max(40, m.width))
+			if i := slices.IndexFunc(starts, func(s int) bool { return s >= m.helpTop }); i > 0 {
+				m.helpTop = starts[i-1]
+			} else if i < 0 && len(starts) > 0 {
+				m.helpTop = starts[len(starts)-1]
+			}
+			return m, nil
+		case "down", "j":
+			starts := m.helpStarts(max(40, m.width))
+			if i := slices.IndexFunc(starts, func(s int) bool { return s > m.helpTop }); i >= 0 {
+				m.helpTop = starts[i]
+			}
+			return m, nil
+		}
 	}
 	a, ok := m.selected()
 	switch s {
 	case "q":
 		return m, tea.Quit
 	case "?":
-		m.help = true
+		m.help, m.helpTop = true, 0
 	case "+", "=", "-", "_":
 		if !ok {
 			return m, nil
@@ -358,9 +389,20 @@ func (m *Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.act(a.Name, i18n.T("tui.token_refreshed", a.Name), false, func(ctx context.Context) error { return m.c.RefreshLogin(ctx, a.Name) })
+	case "R":
+		switch {
+		case !ok:
+			return m, nil
+		case a.Resets == nil:
+			return m, m.sayErr(i18n.T("tui.no_reset_credits", a.Name))
+		}
+		m.mode, m.pending, m.left, m.flash = modeReset, a.Name, a.Resets.Left, ""
 	case "l":
 		m.mode, m.hint = modeName, ""
 		m.input.Reset()
+		if ok && relogin(a) {
+			m.input.SetValue(a.Name)
+		}
 		return m, m.input.Focus()
 	case "w":
 		if !ok {
@@ -411,3 +453,7 @@ func (m *Model) setWeekly() (tea.Model, tea.Cmd) {
 	})
 	return m, m.act(name, done, false, func(ctx context.Context) error { return m.c.SetWeekly(ctx, name, v) })
 }
+
+// relogin reports whether l logs a in again rather than adding an account: its login is gone or ends
+// soon, and it is not the one Claude Code uses, whose login only claude renews.
+func relogin(a api.Account) bool { return !a.Active && (a.NeedsLogin || a.LoginEnding) }

@@ -23,6 +23,7 @@ type Usage struct {
 	FiveHour, SevenDay *Window
 	NoFiveHour         bool // five_hour is null, not just missing or unreadable
 	Models             []ModelWindow
+	Resets             []ResetCredit // usable now, the one a reset spends next first
 }
 
 type UsageResult struct {
@@ -70,6 +71,7 @@ func ParseUsage(b []byte) (Usage, error) {
 			u.Models = append(u.Models, ModelWindow{m.name, *w})
 		}
 	}
+	u.Resets = resetCredits(top[resetProgram])
 	var limits []json.RawMessage
 	_ = json.Unmarshal(top["limits"], &limits)
 	for _, raw := range limits {
@@ -100,9 +102,10 @@ func ParseUsage(b []byte) (Usage, error) {
 }
 
 func (c *Client) Usage(ctx context.Context, accessToken string) (UsageResult, error) {
-	status, hdr, b, err := c.do(ctx, http.MethodGet, c.APIBase+"/api/oauth/usage", nil, map[string]string{
+	status, hdr, b, err := c.do(ctx, http.MethodGet, c.APIBase+"/api/oauth/usage?"+resetProgram+"=1", nil, map[string]string{
 		"Authorization":  "Bearer " + accessToken,
 		"anthropic-beta": "oauth-2025-04-20",
+		"User-Agent":     c.claudeAgent(ctx),
 	})
 	if err != nil {
 		return UsageResult{}, err
@@ -164,6 +167,9 @@ func Body(u Usage) []byte {
 	}
 	if limits != nil {
 		top["limits"] = limits
+	}
+	if len(u.Resets) > 0 {
+		top[resetProgram] = resetBlock(u.Resets)
 	}
 	b, _ := json.Marshal(top)
 	return b

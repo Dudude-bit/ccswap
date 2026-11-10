@@ -121,6 +121,21 @@ test('plural forms follow the language', () => {
   assert.equal(ctx.t('x', 1), 'n=1');
 });
 
+test('texts are typeset so a line never breaks badly, commands excepted', () => {
+  const { ctx } = page();
+  ctx.useTexts({ lang: 'ru', languages: [], messages: {
+    back: 'вернётся в {0}', five: 'на 5-часового лимита · приоритет {0} ≈ {1}', cc: 'Claude Code взял вход',
+    cmd: 'выполните `ccswap use a --force` в терминале', end: 'когда расход упадёт на',
+  } });
+  assert.equal(ctx.t('end'), 'когда расход упадёт\u00a0на');
+  assert.equal(ctx.t('back', 'ср 15:22'), 'вернётся в\u00a0ср 15:22');
+  assert.equal(ctx.t('five', 20, '14:22'), 'на 5\u2011часового лимита ·\u00a0приоритет 20 ≈\u00a014:22');
+  assert.equal(ctx.t('cc'), 'Claude\u00a0Code взял вход');
+  const code = nodes(ctx.tNodes('cmd')).find((n) => n.tag === 'code');
+  assert.equal(code.text, 'ccswap use a --force');
+  assert.equal(ctx.t('cmd'), 'выполните ccswap use a --force в\u00a0терминале');
+});
+
 test('wanted: the kept choice, each browser language and its base, then English', () => {
   const langs = ['pt-BR', 'de', 'en-US', 'pt-PT'];
   assert.deepEqual(plain(page({ stored: { 'ccswap-lang': 'ru' }, langs }).ctx.wanted()), ['ru', 'pt-BR', 'pt', 'de', 'en-US', 'en', 'pt-PT']);

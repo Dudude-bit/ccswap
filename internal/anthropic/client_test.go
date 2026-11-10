@@ -82,15 +82,27 @@ func TestRefreshOtherErrorHidesSecrets(t *testing.T) {
 
 func TestUsageSendsHeaders(t *testing.T) {
 	const body = `{"five_hour":{"utilization":1,"resets_at":null}}`
+	ua := "ccswap"
 	c := newTest(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer tok" || r.Header.Get("anthropic-beta") != "oauth-2025-04-20" || r.URL.Path != "/api/oauth/usage" {
-			t.Errorf("bad request %v", r.Header)
+		if r.Header.Get("Authorization") != "Bearer tok" || r.Header.Get("anthropic-beta") != "oauth-2025-04-20" || r.URL.Path != "/api/oauth/usage" ||
+			r.URL.Query().Get("cedar_ember") != "1" || r.Header.Get("User-Agent") != ua {
+			t.Errorf("bad request %v %v", r.URL, r.Header)
 		}
 		w.Write([]byte(body))
 	})
 	res, err := c.Usage(context.Background(), "tok")
 	if err != nil || string(res.Body) != body || res.Status != 200 || res.Usage.FiveHour == nil {
 		t.Errorf("%+v %v", res, err)
+	}
+	c.ClaudeVersion = func(context.Context) string { return "2.1.319" } // Anthropic offers resets only to a recent Claude Code
+	ua = "claude-cli/2.1.319 (external, cli)"
+	if _, err := c.Usage(context.Background(), "tok"); err != nil {
+		t.Fatal(err)
+	}
+	c.ClaudeVersion = func(context.Context) string { return "" }
+	ua = "ccswap"
+	if _, err := c.Usage(context.Background(), "tok"); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -125,6 +137,61 @@ func TestParseUsage(t *testing.T) {
 	if len(u.Models) != 2 || u.Models[0].Name != "opus" || u.Models[0].Utilization != 98 || !u.Models[0].ResetsAt.IsZero() ||
 		u.Models[1].Name != "Fable" || u.Models[1].Utilization != 60 {
 		t.Errorf("%+v", u.Models)
+	}
+	ends := time.Date(2027, 3, 9, 7, 59, 0, 0, time.UTC)
+	if r := u.Resets; len(r) != 2 || r[0].ID != "launch" || r[0].Left != 1 || !r[0].EndsAt.Equal(ends) || r[1] != (ResetCredit{"tenure", 2, time.Time{}}) {
+		t.Errorf("the next grant first, the rest as usable: %+v", u.Resets)
+	}
+}
+
+func TestResetCreditsNeedEligibleAndUsable(t *testing.T) {
+	for _, b := range []string{
+		`{"cedar_ember":{"eligible":false,"ineligible_reason":"cli_version","grants":[],"next_grant_id":null}}`,
+		`{"cedar_ember":{"eligible":true,"grants":[{"id":"a","resets_left":1,"usable_now":true}],"next_grant_id":"gone"}}`,
+		`{"cedar_ember":{"eligible":true,"grants":[{"id":"a","resets_left":1,"usable_now":true,"paused":true}],"next_grant_id":"a"}}`,
+		`{"cedar_ember":{"eligible":true,"grants":[{"id":"a","resets_left":0,"usable_now":true}],"next_grant_id":"a"}}`,
+		`{"cedar_ember":{"eligible":true,"grants":[{"id":"a","resets_left":1,"usable_now":false}],"next_grant_id":"a"}}`,
+		`{"cedar_ember":"x"}`,
+		`{}`,
+	} {
+		if u, err := ParseUsage([]byte(b)); err != nil || u.Resets != nil {
+			t.Errorf("%s: %+v %v", b, u.Resets, err)
+		}
+	}
+	b := `{"cedar_ember":{"eligible":true,"grants":[{"id":"a","resets_left":"x"},{"id":"b","resets_left":1,"usable_now":true}],"next_grant_id":"b"}}`
+	if u, err := ParseUsage([]byte(b)); err != nil || len(u.Resets) != 1 || u.Resets[0].ID != "b" {
+		t.Errorf("a malformed grant is skipped: %+v %v", u.Resets, err)
+	}
+}
+
+func TestReset(t *testing.T) {
+	result, status := `{"result":"reset"}`, 200
+	c := newTest(t, func(w http.ResponseWriter, r *http.Request) {
+		var m map[string]string
+		json.NewDecoder(r.Body).Decode(&m)
+		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/api/organizations/org%2F1/reset_rate_limits" || r.Header.Get("Authorization") != "Bearer tok" ||
+			r.Header.Get("anthropic-beta") != "oauth-2025-04-20" || r.Header.Get("User-Agent") != "claude-cli/2.1.319 (external, cli)" ||
+			m["program"] != "cedar_ember" || m["grant_id"] != "launch" || m["request_id"] != "req" {
+			t.Errorf("bad request %s %v %v", r.URL.EscapedPath(), r.Header, m)
+		}
+		w.WriteHeader(status)
+		w.Write([]byte(result))
+	})
+	c.ClaudeVersion = func(context.Context) string { return "2.1.319" }
+	if s, r, err := c.Reset(context.Background(), "tok", "org/1", "launch", "req"); err != nil || s != 200 || r != "reset" {
+		t.Fatal(s, r, err)
+	}
+	result = `{"result":"cooldown"}`
+	if _, r, err := c.Reset(context.Background(), "tok", "org/1", "launch", "req"); err != nil || r != "cooldown" {
+		t.Fatal(r, err)
+	}
+	result, status = `slow down`, 429
+	if s, r, err := c.Reset(context.Background(), "tok", "org/1", "launch", "req"); err != nil || s != 429 || r != "" {
+		t.Fatal(s, r, err)
+	}
+	result, status = `{}`, 200
+	if _, _, err := c.Reset(context.Background(), "tok", "org/1", "launch", "req"); err == nil {
+		t.Fatal("an answer without a result is an error")
 	}
 }
 
@@ -223,6 +290,7 @@ func TestBodyRoundTrips(t *testing.T) {
 		FiveHour: &Window{Utilization: 42},
 		SevenDay: &Window{Utilization: 17.5, ResetsAt: reset},
 		Models:   []ModelWindow{{"opus", Window{98, time.Time{}}}, {"Fable", Window{60, reset}}},
+		Resets:   []ResetCredit{{"launch", 1, reset}, {"tenure", 1, time.Time{}}},
 	}
 	got, err := ParseUsage(Body(u))
 	if err != nil || !reflect.DeepEqual(got, u) {

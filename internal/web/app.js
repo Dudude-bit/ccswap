@@ -94,13 +94,15 @@ const where = () => state.status?.host || t('host.any');
 const ERR_CODES = ['offline', 'timeout', 'unknown_active', 'internal', 'entry_expired', 'entry_changed', 'cannot_identify',
   'invalid_thresholds', 'target_refreshing', 'not_found', 'needs_login', 'read_only', 'local_only', 'bad_code', 'migrating',
   'claude_owns', 'refresh_failed', 'active_account', 'code_refused', 'login_gone', 'wrong_account', 'login_failed', 'login_pending',
-  'login_cooldown', 'no_update', 'updating', 'update_failed'];
+  'login_cooldown', 'no_update', 'updating', 'update_failed', 'no_reset_credit', 'reset_changed', 'not_limited', 'reset_cooldown',
+  'reset_failed'];
 
 const errArgs = (e, name) => ({
   cannot_identify: [e.message], invalid_thresholds: [e.message], target_refreshing: [name], not_found: [name],
   needs_login: [name, where()], migrating: [name], claude_owns: [name], active_account: [name, where()],
   wrong_account: [state.accounts?.find((a) => a.name === name)?.email || name], login_failed: [where(), e.message],
   login_pending: [name], login_cooldown: [name], update_failed: [e.message],
+  no_reset_credit: [name], reset_changed: [name], not_limited: [name], reset_failed: [e.message],
 }[e.code] ?? [where()]);
 
 function describe(e, name = '<name>') {
@@ -140,11 +142,13 @@ function setBusy(btn, busy, label) {
 function showMsg(el, text, kind = 'crit') {
   el.replaceChildren(text);
   el.classList.toggle('warn', kind === 'warn');
+  el.classList.remove('act');
   el.hidden = false;
 }
 
 function hideMsg(el) {
   el.hidden = true;
+  el.classList.remove('act');
   el.replaceChildren();
 }
 
@@ -166,8 +170,8 @@ function ago(iso) {
 // clock is at's time, with its weekday off today, or its date when the weekday could be another week's.
 function clock(at) {
   const now = new Date();
-  if (Math.abs(at - now) >= 6 * 24 * HOUR) return `${dateFmt.format(at)} ${timeFmt.format(at)}`;
-  return at.toDateString() === now.toDateString() ? timeFmt.format(at) : `${dayFmt.format(at)} ${timeFmt.format(at)}`;
+  if (Math.abs(at - now) >= 6 * 24 * HOUR) return `${dateFmt.format(at)} ${timeFmt.format(at)}`.replace(/ /g, '\u00a0');
+  return at.toDateString() === now.toDateString() ? timeFmt.format(at) : `${dayFmt.format(at)}\u00a0${timeFmt.format(at)}`;
 }
 
 const num = (n) => numFmt.format(Math.round(n * 10) / 10);
@@ -283,7 +287,7 @@ function checkEvery(a) {
 
 // checkNote is what to say about a's last check, if anything: [text, bad].
 function checkNote(a) {
-  if (a.error) return [t('n.failed', a.error), true];
+  if (a.error) return [t('n.failed', a.error), false];
   if (!a.checked_at) return a.needs_login ? null : [t('n.notChecked'), false];
   if (Date.now() - new Date(a.checked_at) > 2000 * checkEvery(a)) return [t('n.checked', ago(a.checked_at)), false];
   return null;
@@ -440,11 +444,17 @@ const pageTitle = (host) => (host ? t('title', host) : 'ccswap');
 
 // alertBox is one line of the ink strip: an account's tag, the message, a quieter tail, a button that logs
 // the account in again here, and one that copies the command when the browser lets the page write the clipboard.
-function alertBox(name, nodes, tail, cmd, login) {
+function alertBox(name, nodes, tail, cmd, login, reset) {
   const body = h('p', 'alert-body', ...nodes);
   if (tail) body.append(' ', h('span', 'q', tail));
   const box = h('div', 'alert', name ? chip(name) : null, body);
   box.setAttribute('role', 'alert');
+  if (reset && state.admin) {
+    const b = h('button', 'btn rs-go', t('row.resetName', reset));
+    b.type = 'button';
+    b.addEventListener('click', () => openReset(rows.get(reset), b));
+    box.append(b);
+  }
   if (login) {
     const b = h('button', 'btn relog-go', t('relog.open'));
     b.type = 'button';
@@ -453,7 +463,7 @@ function alertBox(name, nodes, tail, cmd, login) {
     box.append(b);
   }
   if (cmd && navigator.clipboard) {
-    const b = h('button', 'btn', t('alert.copy'));
+    const b = h('button', 'btn copy', t('alert.copy'));
     b.type = 'button';
     b.addEventListener('click', async () => {
       try {
@@ -481,8 +491,11 @@ function renderAlerts() {
   const usable = state.accounts.filter((a) => a.enabled && !a.needs_login);
   if (usable.length && usable.every((a) => a.exhausted)) {
     const first = usable.find((a) => a.name === st.first_free && a.free_at), f = first && freeAt(first); // the daemon's pick
-    specs.push(!first ? [null, 'alert.allUnknown', [], null, null]
-      : f ? [first.name, 'alert.all', [first.name, clock(f.at)], null, null] : [first.name, 'alert.allCheck', [first.name], null, null]);
+    const spare = ordered().find((a) => a.resets && a.enabled && !a.needs_login); // a credit ends the wait now
+    const tail = spare && ['alert.resets', spare.resets.left, spare.name];
+    specs.push(!first ? [null, 'alert.allUnknown', [], tail, null, null, spare?.name]
+      : f ? [first.name, 'alert.all', [first.name, clock(f.at)], tail, null, null, spare?.name]
+        : [first.name, 'alert.allCheck', [first.name], tail, null, null, spare?.name]);
   }
   if (st.unknown_active) specs.push([null, 'alert.unknown', [where()], 'alert.unknownTail', null]);
   const login = ordered().filter((a) => a.needs_login);
@@ -498,10 +511,11 @@ function renderAlerts() {
       : a.active ? 'alert.loginEndsClaude' : 'alert.loginEnds';
     specs.push([a.name, key, [a.name, clock(end), where()], 'alert.loginTail', a.active ? null : `ccswap login ${a.name}`, a.active ? null : a.name]);
   }
-  const shown = JSON.stringify([lang, specs.map(([n, ...rest]) => [n && tagOf(n), n, ...rest])]);
+  const shown = JSON.stringify([lang, state.admin, specs.map(([n, ...rest]) => [n && tagOf(n), n, ...rest])]);
   if (shown === alertsShown) return;
   alertsShown = shown;
-  $('alerts').replaceChildren(...specs.map(([n, key, args, tail, cmd, login]) => alertBox(n, tNodes(key, ...args), tail && t(tail), cmd, login)));
+  $('alerts').replaceChildren(...specs.map(([n, key, args, tail, cmd, login, reset]) =>
+    alertBox(n, tNodes(key, ...args), tail && (Array.isArray(tail) ? t(...tail) : t(tail)), cmd, login, reset)));
 }
 
 let updateShown = '';
@@ -616,7 +630,7 @@ function gauge(el, { label, w, limit, none }) {
   el.classList.toggle('no-limit', Boolean(none));
   el.classList.toggle('over', Boolean(w) && w.utilization >= limit);
   if (!w) {
-    el.querySelector('.n').textContent = none ? t('m.noLimit') : '—';
+    el.querySelector('.n').textContent = none ? t('m.noLimit') : '?';
     el.style.setProperty('--u', '0%');
     bar.removeAttribute('aria-valuenow');
     bar.setAttribute('aria-label', t(none ? 'm.noLimitLabel' : 'm.noDataLabel', label));
@@ -628,13 +642,14 @@ function gauge(el, { label, w, limit, none }) {
   el.style.setProperty('--u', `${u}%`);
   bar.setAttribute('aria-valuenow', String(u));
   bar.setAttribute('aria-label', t('m.label', label, pct(w.utilization), pct(limit)));
-  el.querySelector('.g-reset').textContent = resetText(w, true);
+  const [at, left] = resetText(w, true).split(/ ·\u00a0/); // on a phone the two go on lines of their own
+  el.querySelector('.g-reset').replaceChildren(at, ...(left ? [h('span', 'g-sep', ' · '), h('span', 'g-left', left)] : []));
 }
 
 // resetText is when w resets: the time and, when long is set, how long until then.
 function resetText(w, long) {
   const at = w.resets_at && new Date(w.resets_at);
-  if (!at) return long ? t('m.unknown') : '—';
+  if (!at) return long ? t('m.unknown') : '';
   if (at <= new Date()) return long ? t('m.waiting') : t('m.reset');
   return long ? t('g.resets', clock(at), duration(at - Date.now())) : clock(at);
 }
@@ -949,9 +964,11 @@ function makeRow(name) {
     use: el.querySelector('.use'),
     tok: el.querySelector('.tok'),
     relog: el.querySelector('.relog'),
+    rsGo: el.querySelector('.c-state .rs-go'),
     msg: el.querySelector('.msg'),
     note: el.querySelector('.row-note'),
-    pending: { prio: false, wk: false, enabled: false, use: false },
+    pending: { prio: false, wk: false, enabled: false, use: false, reset: false },
+    asking: null, // the button whose reset waits for its confirmation
     prioTimer: 0,
   };
   for (const b of el.querySelectorAll('[data-step]')) {
@@ -970,6 +987,8 @@ function makeRow(name) {
   r.use.addEventListener('click', () => switchTo(r));
   r.tok.addEventListener('click', () => refreshToken(r));
   r.relog.addEventListener('click', () => openRelog(r.name, r.relog));
+  r.rsGo.addEventListener('click', () => openReset(r, r.rsGo));
+  r.msg.addEventListener('keydown', (e) => { if (e.key === 'Escape' && r.asking && !r.pending.reset) closeReset(r); });
   return r;
 }
 
@@ -979,13 +998,14 @@ function makeRow(name) {
 function loginCell(r, a) {
   const end = loginEnd(a), tok = !a.needs_login && a.token_expires_at ? new Date(a.token_expires_at) : null;
   const endEl = r.el.querySelector('.lg-end'), tokEl = r.el.querySelector('.lg-tok'), now = Date.now();
-  endEl.textContent = !end ? '—' : end - now >= 6 * 24 * HOUR ? dateFmt.format(end) : clock(end);
+  endEl.textContent = !end ? '' : end - now >= 6 * 24 * HOUR ? dateFmt.format(end) : clock(end);
   endEl.title = !end ? (a.needs_login ? '' : t('login.unknown')) : t(end <= now ? 'login.ended' : 'login.until', clock(end));
   endEl.classList.toggle('soon', Boolean(end) && a.login_ending);
   endEl.classList.toggle('none', !end);
   tokEl.textContent = !tok ? '' : tok <= now ? t('login.expired') : clock(tok);
   tokEl.title = !tok ? '' : `${t(tok <= now ? 'login.tokenExpired' : 'login.tokenUntil', clock(tok))}. ${t(a.active ? 'login.claude' : 'login.auto')}`;
   tokEl.hidden = !tok;
+  r.el.querySelector('.lg').hidden = !end && !tok;
   r.relog.hidden = a.active || !a.needs_login && !a.login_ending;
   r.relog.setAttribute('aria-label', t('relog.openLabel', a.name));
   r.tok.hidden = a.active || a.needs_login || !r.relog.hidden;
@@ -993,9 +1013,29 @@ function loginCell(r, a) {
   if (!r.tok.classList.contains('asleep')) r.tok.title = r.tok.dataset.title;
 }
 
-// usage fills a table cell with a window's use, its threshold tick and its reset.
-function usage(td, x) {
+// resetMark shows a's reset credits beside its state, as ↺ and their count, on a button that spends one where
+// the page takes changes: the state's first line has the room, where another column would turn the table to
+// blocks. When the one spent next runs out is in the title.
+function resetMark(r, a) {
+  const rs = a.resets, end = rs?.ends_at ? new Date(rs.ends_at) : null, v = r.el.querySelector('.rs-v');
+  const about = !rs ? '' : end ? `${t('rs.count', rs.left)}, ${t('rs.ends', clock(end))}` : t('rs.count', rs.left);
+  v.textContent = rs ? `↺ ${num(rs.left)}` : '';
+  v.title = about;
+  v.hidden = !rs;
+  r.rsGo.hidden = !rs;
+  r.rsGo.querySelector('.rs-n').textContent = rs ? num(rs.left) : '';
+  r.rsGo.setAttribute('aria-label', t('row.resetLabel', a.name));
+  r.rsGo.dataset.title = about;
+  if (!r.rsGo.classList.contains('asleep')) r.rsGo.title = about;
+  if (r.asking && !rs && !r.pending.reset) closeReset(r);
+}
+
+// usage fills a table cell with a window's use, its threshold tick and its reset. Numbers from before a
+// login went are not shown, as the state and the next change say why, and those of a failed check are muted.
+function usage(td, x, a) {
   const line = h('span', 'use-line');
+  if (a.needs_login) return td.replaceChildren();
+  line.classList.toggle('stale', Boolean(a.error));
   const bar = h('span', 'mbar', h('i', 'fill'), h('i', 'tick'));
   bar.style.setProperty('--t', `${Math.min(100, x.limit)}%`);
   if (x.w) {
@@ -1007,7 +1047,7 @@ function usage(td, x) {
     line.append(h('span', 'rs', t('m.noLimit')));
   } else {
     line.classList.add('none');
-    line.append(h('span', 'pc', '—'), bar, h('span', 'rs', t('m.noData')));
+    line.append(h('span', 'pc', ''), bar, h('span', 'rs', t('m.noData')));
   }
   td.replaceChildren(line);
 }
@@ -1025,16 +1065,19 @@ function renderRow(r, a) {
   el.querySelector('.st b').textContent = t(KINDS[kind]);
   const since = kind === 'duty' && shiftStart();
   el.querySelector('.st2').textContent = since ? t('row.since', clock(since))
-    : kind === 'resting' || (kind === 'duty' && a.exhausted) ? exhaustedText(a.exhausted_reason) : '';
+    : kind === 'resting' || (kind === 'duty' && a.exhausted) ? exhaustedText(a.exhausted_reason)
+      : a.error && a.checked_at ? t('row.numbersFrom', clock(new Date(a.checked_at))) : '';
   const ws = windows(a);
   const [five, week, models, next] = el.querySelectorAll('.c-use, .c-models, .c-next');
-  usage(five, ws[0]);
-  usage(week, ws[1]);
-  const ms = ws.slice(2).filter((m) => m.w);
-  models.replaceChildren(...(ms.length ? ms.map((m) => h('span', 'use-model' + (m.w.utilization >= m.limit ? ' over' : ''), `${m.short} ${pct(m.w.utilization)}`))
-    : [h('span', 'use-model', '—')]));
+  usage(five, ws[0], a);
+  usage(week, ws[1], a);
+  const ms = a.needs_login ? [] : ws.slice(2).filter((m) => m.w);
+  const model = (m) => h('span', 'use-model' + (m.w.utilization >= m.limit ? ' over' : ''), `${m.short} ${pct(m.w.utilization)}`);
+  models.replaceChildren(...ms.map(model));
+  if (ms.length) week.append(h('span', 'use-sub', ...ms.map(model))); // where the table is tight, the models column folds in here
   next.textContent = nextChange(a, kind);
   next.classList.toggle('m', kind === 'ready' || kind === 'off');
+  resetMark(r, a);
   loginCell(r, a);
   for (const td of el.querySelectorAll('[data-col]')) td.dataset.label = t(td.dataset.col);
 
@@ -1073,6 +1116,7 @@ function renderAccounts() {
   }
   $('acct-count').textContent = t('accts.count', accts.length);
   table.classList.toggle('no-models', !accts.some((a) => a.models.length));
+  $('acct-rs').hidden = !accts.some((a) => a.resets);
   for (const a of accts) {
     let r = rows.get(a.name);
     if (!r) { r = makeRow(a.name); rows.set(a.name, r); }
@@ -1100,27 +1144,34 @@ function textWidth(el, s) {
 
 // fitTable lays the table out as one block per account where its columns do not fit the page, always so on
 // narrow screens. As a table, it shows the emails beside the names only if every row has the room for its
-// name whole and for its email's local part and about a dozen characters; a stub says nothing, and a
-// column with gaps reads as random. The names' titles keep the emails. A name with no room for about a
-// dozen characters even then means the columns do not fit.
+// name whole and for its email's local part and about a dozen characters; a stub says nothing, and a column
+// with gaps reads as random. The names' titles keep the emails. Short of room past that, the next change
+// wraps to two lines and the models fold into the weekly cell (tight); a name with no room for about a dozen
+// characters even then means the columns do not fit.
 function fitTable() {
   const table = $('accounts'), all = [...rows.values()];
-  table.classList.remove('blocks', 'no-mail');
-  if (stacked.matches || table.offsetWidth > table.parentElement.clientWidth + 1) {
+  table.classList.remove('blocks', 'no-mail', 'tight');
+  const over = () => table.offsetWidth > table.parentElement.clientWidth + 1;
+  const blocks = () => {
+    table.classList.remove('no-mail', 'tight');
     table.classList.add('blocks');
-    return;
-  }
-  const cut = all.some(({ el }) => {
+  };
+  if (!stacked.matches && over()) table.classList.add('tight');
+  if (stacked.matches || over()) return blocks();
+  const mailCut = all.some(({ el }) => {
     const who = el.querySelector('.acc-who'), nm = el.querySelector('.nm'), mail = el.querySelector('.mail');
     const end = who.getBoundingClientRect().right, email = mail.textContent;
     const need = Math.max(textWidth(mail, email.split('@')[0] + '@'), textWidth(mail, email.slice(0, 12)));
     return nm.getBoundingClientRect().right > end + 1 || end - mail.getBoundingClientRect().left + 1 < need;
   });
-  table.classList.toggle('no-mail', cut);
-  if (cut && all.some(({ el }) => {
+  table.classList.toggle('no-mail', mailCut);
+  const short = () => all.some(({ el }) => {
     const nm = el.querySelector('.nm'), who = el.querySelector('.acc-who').getBoundingClientRect();
     return nm.getBoundingClientRect().right > who.right + 1 && who.width + 1 < textWidth(nm, nm.textContent.slice(0, 12));
-  })) table.classList.replace('no-mail', 'blocks');
+  });
+  if (!mailCut || !short()) return;
+  table.classList.add('tight');
+  if (short()) blocks();
 }
 
 function renderHow() {
@@ -1204,7 +1255,7 @@ function setOffline(e) {
 // asleep disables the controls that ask the daemon while it cannot be reached, saying why in their title, and
 // wakes them once it is back.
 function asleep(off) {
-  const live = state.admin ? '#auto, #strategy, #refresh, #upd-go, #accounts .use, #accounts .step, #accounts .enabled, #accounts .stepper input, #accounts .wk, .relog-go' : '.relog-go';
+  const live = state.admin ? '#auto, #strategy, #refresh, #upd-go, #accounts .use, #accounts .step, #accounts .enabled, #accounts .stepper input, #accounts .wk, .relog-go, .rs-go, .rs-yes' : '.relog-go';
   for (const el of document.querySelectorAll(live)) {
     if (off) {
       el.classList.add('asleep');
@@ -1461,6 +1512,73 @@ async function refreshToken(r) {
     rowMsg(r, `${t('x.token')} ${describe(e, r.name)}`);
   } finally {
     setBusy(r.tok, false);
+  }
+  render();
+}
+
+// atLimit is whether a window of a is spent, or Anthropic said a hit its limit: where a reset credit gives back
+// all it can. ccswap's own thresholds sit below that.
+const atLimit = (a) => a.exhausted_reason === 'limit_hit' || windows(a).some((x) => x.w && x.w.utilization >= 100);
+
+// givesBack says how much of its most used window a reset gives back, as "62% of its week"; '' without numbers.
+function givesBack(a) {
+  const parts = [[a.five_hour, (v) => t('of.five', v)], [a.seven_day, (v) => t('of.week', v)],
+    ...a.models.map((m) => [m, (v) => t('of.model', v, upFirst(m.name))])].filter(([w]) => w);
+  const [w, say] = parts.sort((p, q) => q[0].utilization - p[0].utilization)[0] || [];
+  return w ? say(pct(w.utilization)) : '';
+}
+
+// openReset asks in r's strip whether to spend one of its reset credits, naming the count it shows, which the
+// daemon checks, so a second click elsewhere spends nothing more. from gets the focus back on cancel.
+function openReset(r, from) {
+  const a = r?.account;
+  if (!a?.resets || r.pending.reset) return;
+  const left = a.resets.left;
+  const yes = h('button', 'btn rs-yes', h('span', 'spin'), h('span', 'label', t('reset.yes')));
+  const no = h('button', 'btn btn-quiet', t('reset.no'));
+  yes.type = no.type = 'button';
+  yes.querySelector('.spin').setAttribute('aria-hidden', 'true');
+  yes.addEventListener('click', () => useReset(r, left));
+  no.addEventListener('click', () => closeReset(r));
+  const ask = h('span', 'grow', ...tNodes('reset.ask', a.name));
+  const f = a.exhausted && freeAt(a);
+  if (f) ask.append(' ', t('reset.gain', clock(f.at)));
+  ask.append(' ', left === 1 ? t('reset.spendsLast') : t('reset.spends', left));
+  const back = givesBack(a);
+  if (!atLimit(a) && back) ask.append(' ', t('reset.notLimited', back));
+  r.asking = from;
+  r.msg.replaceChildren(ask, yes, no);
+  r.msg.classList.add('warn', 'act');
+  r.msg.hidden = false;
+  syncRowMsg(r);
+  r.el.scrollIntoView({ block: 'nearest' });
+  yes.focus();
+}
+
+function closeReset(r) {
+  const from = r.asking;
+  r.asking = null;
+  hideRowMsg(r);
+  [from, r.rsGo, r.use, r.enabled].find((el) => el?.isConnected && !el.hidden && el.offsetParent)?.focus();
+}
+
+// useReset spends the credit: no toast on success, as the row's count and limits show it.
+async function useReset(r, left) {
+  const yes = r.msg.querySelector('.rs-yes'), no = r.msg.querySelector('.btn-quiet');
+  r.pending.reset = true;
+  yes.style.minWidth = `${yes.offsetWidth}px`;
+  setBusy(yes, true, t('reset.busy'));
+  no.disabled = true;
+  try {
+    patchLocal(r.name, await api('POST', `/v1/accounts/${encodeURIComponent(r.name)}/reset`, { left }));
+    r.pending.reset = false;
+    closeReset(r);
+  } catch (e) {
+    if (e.code === 'unauthorized') return showAuth(true);
+    r.asking = null;
+    rowMsg(r, `${t('x.reset')} ${describe(e, r.name)}`);
+  } finally {
+    r.pending.reset = false;
   }
   render();
 }
@@ -1879,7 +1997,7 @@ async function init() {
   // Pointing at or focusing an account on the rota lights up its table row, and the other way round.
   for (const root of [$('rota-lanes'), $('accounts')]) {
     const named = (e) => e.target.closest?.('[data-name]')?.dataset.name || '';
-    root.addEventListener('pointerover', (e) => setHover(named(e)));
+    root.addEventListener('pointerover', (e) => { if (e.pointerType === 'mouse') setHover(named(e)); });
     root.addEventListener('pointerleave', () => setHover(document.activeElement?.closest?.('[data-name]')?.dataset.name || ''));
     root.addEventListener('focusin', (e) => setHover(named(e)));
     root.addEventListener('focusout', (e) => { if (!root.contains(e.relatedTarget)) setHover(''); });
