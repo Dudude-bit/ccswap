@@ -1146,6 +1146,29 @@ func (m *Model) helpRoom() int {
 	return m.screenHeight() - 1 - flash - len(m.helpKeys(w, true))
 }
 
+// stack joins blocks of lines into a screen.
+func stack(parts ...[]string) string {
+	var out []string
+	for _, part := range parts {
+		out = append(out, part...)
+	}
+	return strings.Join(out, "\n") + "\n"
+}
+
+// helpScreen is the screen with help open: under the table when both fit, else help alone, which pages;
+// alone reports the latter, where the keys that act on the selected account have nothing on screen.
+func (m *Model) helpScreen(w int, now time.Time) (screen string, alone bool) {
+	lay, head := layoutOf(w), []string{m.header(w)}
+	var legend []string
+	if lay == slim {
+		legend = m.slimLegend(w)
+	}
+	if s := stack(head, []string{""}, m.table(w, lay, now, 0), legend, m.helpBox(w, 0), m.tail(w, now, true)); strings.Count(s, "\n") <= m.screenHeight() {
+		return s, false
+	}
+	return stack(head, m.helpBox(w, m.helpRoom()), m.tail(w, now, false)), true
+}
+
 // render lays the screen out to the terminal's height: the prompt and the keys always show, and on a short
 // terminal blank lines, the slim legend, the panel's check lines, its windows and then the panel give way,
 // least needed first; past that the table scrolls around the selected account, and help pages.
@@ -1153,13 +1176,7 @@ func (m *Model) render() string {
 	p := m.pal
 	w := max(40, m.width)
 	lay, now, h := layoutOf(w), time.Now(), m.screenHeight()
-	join := func(parts ...[]string) string {
-		var out []string
-		for _, part := range parts {
-			out = append(out, part...)
-		}
-		return strings.Join(out, "\n") + "\n"
-	}
+	join := stack
 	head := []string{m.header(w)}
 	switch {
 	case !m.loaded && m.down:
@@ -1181,10 +1198,8 @@ func (m *Model) render() string {
 		return nil
 	}
 	if m.help {
-		if s := join(head, []string{""}, m.table(w, lay, now, 0), legend(true), m.helpBox(w, 0), m.tail(w, now, true)); strings.Count(s, "\n") <= h {
-			return s
-		}
-		return join(head, m.helpBox(w, m.helpRoom()), m.tail(w, now, false))
+		s, _ := m.helpScreen(w, now)
+		return s
 	}
 	a, ok := m.selected()
 	for _, step := range []struct {

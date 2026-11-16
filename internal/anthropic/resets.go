@@ -79,10 +79,17 @@ func resetBlock(credits []ResetCredit) map[string]any {
 	return map[string]any{"eligible": true, "grants": gs, "next_grant_id": credits[0].ID}
 }
 
-// Reset spends one reset of credit on the account the token belongs to, in its organization org. The
-// claim lands once per requestID, so a retry with the same one is safe. result is Anthropic's word for
-// a 2xx: reset, already_used, not_limited, cooldown, ineligible or unavailable.
-func (c *Client) Reset(ctx context.Context, accessToken, org, credit, requestID string) (status int, result string, err error) {
+// ResetResult is Anthropic's answer to a reset claim that came back 2xx.
+type ResetResult struct {
+	Result        string    // reset, already_used, not_limited, cooldown, ineligible or unavailable
+	Left          *int      // the resets the grant has left after the claim, when Anthropic said
+	CooldownUntil time.Time // when resets may be claimed again, after a cooldown; zero when not said
+}
+
+// Reset spends one reset of credit on the account the token belongs to, in its organization org. Anthropic
+// takes one claim per requestID: a retry with the same one spends nothing more and answers already_used
+// once the first landed.
+func (c *Client) Reset(ctx context.Context, accessToken, org, credit, requestID string) (status int, res ResetResult, err error) {
 	body, _ := json.Marshal(map[string]string{"program": resetProgram, "grant_id": credit, "request_id": requestID})
 	status, _, b, err := c.do(ctx, http.MethodPost, c.APIBase+"/api/organizations/"+url.PathEscape(org)+"/reset_rate_limits", body, map[string]string{
 		"Authorization":  "Bearer " + accessToken,
@@ -91,15 +98,21 @@ func (c *Client) Reset(ctx context.Context, accessToken, org, credit, requestID 
 		"User-Agent":     c.claudeAgent(ctx),
 	})
 	if err != nil || status/100 != 2 {
-		return status, "", err
+		return status, ResetResult{}, err
 	}
 	var r struct {
-		Result string `json:"result"`
+		Result   string  `json:"result"`
+		Left     *int    `json:"resets_left"`
+		Cooldown *string `json:"cooldown_until"`
 	}
 	if err := json.Unmarshal(b, &r); err != nil || r.Result == "" {
-		return status, "", fmt.Errorf("reset: bad response: %.200s", b)
+		return status, ResetResult{}, fmt.Errorf("reset: bad response: %.200s", b)
 	}
-	return status, r.Result, nil
+	res = ResetResult{Result: r.Result, Left: r.Left}
+	if r.Cooldown != nil {
+		res.CooldownUntil, _ = time.Parse(time.RFC3339, *r.Cooldown) // unreadable: not said
+	}
+	return status, res, nil
 }
 
 // claudeAgent is the user agent of Claude Code's own version: Anthropic offers reset credits only to a

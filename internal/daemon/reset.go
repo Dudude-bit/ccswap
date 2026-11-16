@@ -2,15 +2,12 @@ package daemon
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/Dudude-bit/ccswap/internal/anthropic"
@@ -22,13 +19,24 @@ import (
 var (
 	// ErrNoResetCredit: the account has no reset credit left, as ccswap last saw or as Anthropic says.
 	ErrNoResetCredit = errors.New("no reset credit left")
-	// ErrResetChanged: the caller showed another count of reset credits than the daemon has.
+	// ErrResetChanged: the caller showed another count of reset credits than the daemon has, or another
+	// claim spent the credit first.
 	ErrResetChanged = errors.New("reset credits changed")
 	// ErrNotLimited: Anthropic spends the credit only at a limit.
 	ErrNotLimited = errors.New("not at a limit")
 	// ErrResetCooldown: Anthropic wants a pause between resets.
-	ErrResetCooldown error = i18n.Err("daemon.reset_cooldown")
+	ErrResetCooldown = errors.New("reset cooldown")
 )
+
+// claimRetry is how long a retry names again a claim Anthropic gave no sure answer to, as Claude Code
+// does: within it, a retry of a claim that landed spends nothing more.
+const claimRetry = 10 * time.Minute
+
+// resetClaim is a reset claim Anthropic gave no sure answer to; the zero value is none.
+type resetClaim struct {
+	credit, id string
+	at         time.Time // when it was first sent
+}
 
 // resetFailed is a reset Anthropic did not confirm, with why; trying again is safe.
 type resetFailed struct{ err error }
@@ -51,12 +59,12 @@ func creditsLeft(credits []anthropic.ResetCredit) int {
 	return n
 }
 
-// spent is credits after one reset of the grant id, in a new slice: views read the old one unlocked.
-func spent(credits []anthropic.ResetCredit, id string) []anthropic.ResetCredit {
+// withLeft is credits with n resets left of the grant id, in a new slice: views read the old one unlocked.
+func withLeft(credits []anthropic.ResetCredit, id string, n int) []anthropic.ResetCredit {
 	var out []anthropic.ResetCredit
 	for _, c := range credits {
 		if c.ID == id {
-			c.Left--
+			c.Left = n
 		}
 		if c.Left > 0 {
 			out = append(out, c)
@@ -65,16 +73,9 @@ func spent(credits []anthropic.ResetCredit, id string) []anthropic.ResetCredit {
 	return out
 }
 
-// resetRequestID names a claim of a grant at the resets it has left. Anthropic takes one claim per id, so
-// a retry after a lost answer names the same one and spends nothing more; a grant's count only falls, so
-// no later claim names one spent before.
-func resetRequestID(email, credit string, left int) string {
-	h := sha256.Sum256(fmt.Appendf(nil, "ccswap:%s:%s:%d", strings.ToLower(email), credit, left))
-	return hex.EncodeToString(h[:16])
-}
-
 // UseReset spends one of name's reset credits when the daemon has left of them, as the caller showed,
-// then asks the account's usage again.
+// then asks the account's usage again. Each claim has an id of its own, as Claude Code's do; only a retry
+// of a claim Anthropic gave no sure answer to names it again, so Anthropic spends one credit for both.
 func (d *Daemon) UseReset(ctx context.Context, name string, left int) (api.Account, error) {
 	defer d.bus.publish()
 	d.resetMu.Lock() // a second click waits, then finds the count changed
@@ -87,8 +88,9 @@ func (d *Daemon) UseReset(ctx context.Context, name string, left int) (api.Accou
 	case a.NeedsLogin:
 		return api.Account{}, i18n.Err("daemon.login_gone", switcher.ErrNeedsLogin, name)
 	}
+	now := d.o.Now()
 	d.mu.Lock()
-	credits := liveCredits(d.acct(name).resets, d.o.Now())
+	credits := liveCredits(d.acct(name).resets, now)
 	d.mu.Unlock()
 	switch n := creditsLeft(credits); {
 	case n == 0:
@@ -109,46 +111,90 @@ func (d *Daemon) UseReset(ctx context.Context, name string, left int) (api.Accou
 	case !ok:
 		return api.Account{}, switcher.ErrTargetRefreshing
 	}
-	credit := credits[0].ID
-	status, result, err := d.o.API.Reset(d.tickCtx(ctx), tok, oa.Org, credit, resetRequestID(a.Email, credit, credits[0].Left))
-	if err != nil || result != "reset" && result != "already_used" {
-		slog.Warn("reset: not confirmed", "account", name, "credit", credit, "status", status, "result", result, "err", err)
+	credit := credits[0]
+	d.mu.Lock()
+	u := d.acct(name)
+	retry := u.claim.credit == credit.ID && now.Sub(u.claim.at) < claimRetry
+	if !retry {
+		u.claim = resetClaim{credit.ID, rand.Text(), now}
+	}
+	claim := u.claim
+	d.mu.Unlock()
+	status, res, err := d.o.API.Reset(d.tickCtx(ctx), tok, oa.Org, credit.ID, claim.id)
+	if err != nil || res.Result != "reset" && res.Result != "already_used" {
+		slog.Warn("reset: not confirmed", "account", name, "credit", credit.ID, "retry", retry, "status", status, "result", res.Result, "err", err)
 	}
 	if _, ok := d.o.Store.State().Find(name); !ok { // removed meanwhile: nothing here to update
 		return api.Account{}, ErrNotFound
 	}
-	// unsure is a claim that may have landed: the account's usage, asked again, shows whether it did.
-	unsure := func(why *i18n.Error) (api.Account, error) {
-		go d.reask(d.tickCtx(ctx), name, holder)
-		return api.Account{}, resetFailed{why}
+	// settled forgets the claim once Anthropic answered it for sure; the next one gets an id of its own.
+	settled := func() {
+		d.mu.Lock()
+		if u := d.acct(name); u.claim.id == claim.id {
+			u.claim = resetClaim{}
+		}
+		d.mu.Unlock()
 	}
+	// reask shows, once the account's usage was asked again, whether a claim landed.
+	reask := func() { go d.reask(d.tickCtx(ctx), name, holder) }
 	switch {
 	case status == 0:
-		return unsure(i18n.Err("daemon.reset_no_answer"))
+		reask()
+		return api.Account{}, resetFailed{i18n.Err("daemon.reset_no_answer")}
 	case status == http.StatusUnauthorized, status == http.StatusForbidden:
 		return api.Account{}, resetFailed{i18n.Err("daemon.reset_login_refused", name)}
 	case status == http.StatusTooManyRequests:
 		return api.Account{}, resetFailed{i18n.Err("daemon.reset_rate_limited")}
 	case status/100 == 5:
-		return unsure(i18n.Err("daemon.reset_status", status))
+		reask()
+		return api.Account{}, resetFailed{i18n.Err("daemon.reset_status", status)}
 	case status/100 != 2:
 		return api.Account{}, resetFailed{i18n.Err("daemon.reset_status", status)}
-	case result == "not_limited":
+	}
+	switch res.Result {
+	case "reset":
+	case "already_used":
+		if !retry { // a claim of another, such as Claude Code at its limit, spent it first
+			settled()
+			reask()
+			return api.Account{}, i18n.Err("daemon.reset_used", ErrResetChanged, name)
+		}
+	case "not_limited":
+		settled()
+		if retry { // its first claim may have cleared the limit
+			reask()
+		}
 		return api.Account{}, i18n.Err("daemon.not_limited", ErrNotLimited, name)
-	case result == "cooldown":
-		return api.Account{}, ErrResetCooldown
-	case result == "ineligible":
+	case "cooldown":
+		if !retry { // after a retry, it may be that claim still landing: a retry names it again
+			settled()
+		}
+		reask()
+		if res.CooldownUntil.After(now) {
+			return api.Account{}, i18n.Err("daemon.reset_cooldown_until", ErrResetCooldown, name, clockText(res.CooldownUntil, now))
+		}
+		return api.Account{}, i18n.Err("daemon.reset_cooldown", ErrResetCooldown, name)
+	case "ineligible":
+		settled()
 		d.mu.Lock()
 		d.acct(name).resets = nil // until the next ask says otherwise
 		d.mu.Unlock()
 		return api.Account{}, i18n.Err("daemon.no_reset_credit", ErrNoResetCredit, name)
-	case result != "reset" && result != "already_used": // unavailable, a word ccswap does not know, or none
-		return unsure(i18n.Err("daemon.reset_unconfirmed"))
+	default: // unavailable, a word ccswap does not know, or none
+		reask()
+		return api.Account{}, resetFailed{i18n.Err("daemon.reset_unconfirmed")}
 	}
-	slog.Info("reset credit spent", "account", name, "credit", credit, "left", left-1)
+	settled()
+	n := credit.Left - 1
+	if res.Left != nil {
+		n = *res.Left
+	}
+	slog.Info("reset credit spent", "account", name, "credit", credit.ID, "retry", retry, "grant_left", n)
 	d.mu.Lock()
-	u := d.acct(name)
-	u.resets = spent(u.resets, credit)
+	u = d.acct(name)
+	if res.Result == "reset" || res.Left != nil { // a retry's first claim may show in the count already
+		u.resets = withLeft(u.resets, credit.ID, n)
+	}
 	u.limitHitUntil = time.Time{} // the limit it hit is cleared
 	d.mu.Unlock()
 	d.reask(ctx, name, holder)

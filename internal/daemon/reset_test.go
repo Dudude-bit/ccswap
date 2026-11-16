@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,12 @@ func withResets(t *testing.T) *tenv {
 	return e
 }
 
+// claimRe is a claim with a request id Anthropic takes: Claude Code's are 1 to 64 of [A-Za-z0-9_-].
+var claimRe = regexp.MustCompile(`^\S+ \S+ \S+ [A-Za-z0-9_-]{1,64}$`)
+
+// claimID is the request id of a claim.
+func claimID(c string) string { return c[strings.LastIndexByte(c, ' ')+1:] }
+
 func (e *tenv) claims() []string {
 	e.api.mu.Lock()
 	defer e.api.mu.Unlock()
@@ -67,7 +74,7 @@ func TestResetSpendsOneCreditAndAsksAgain(t *testing.T) {
 	if err != nil || a.Resets == nil || a.Resets.Left != 1 || a.Resets.Credit != "tenure" || a.SevenDay == nil || a.SevenDay.Utilization != 0 || a.Exhausted {
 		t.Fatalf("the answer shows the cleared limits: %+v %v", a, err)
 	}
-	if c := e.claims(); len(c) != 1 || c[0] != "atB org-b launch "+resetRequestID("b@x", "launch", 1) {
+	if c := e.claims(); len(c) != 1 || !claimRe.MatchString(c[0]) || !strings.HasPrefix(c[0], "atB org-b launch ") {
 		t.Fatal(c)
 	}
 	if _, err := e.d.UseReset(context.Background(), "b", 2); !errors.Is(err, ErrResetChanged) || len(e.claims()) != 1 {
@@ -89,6 +96,49 @@ func TestResetRetryNamesTheSameClaim(t *testing.T) {
 	}
 	if c := e.claims(); len(c) != 2 || c[0] != c[1] {
 		t.Fatal("a retry names the same claim, so Anthropic spends one credit:", c)
+	}
+}
+
+func TestResetClaimIDs(t *testing.T) {
+	e := withResets(t)
+	claim := func(answer resp) error {
+		t.Helper()
+		e.api.set(func(f *fakeAnthropic) { f.resets = []resp{answer} })
+		_, err := e.d.UseReset(context.Background(), "b", 2)
+		return err
+	}
+	last := func() string { c := e.claims(); return claimID(c[len(c)-1]) }
+
+	if err := claim(resp{200, `{"result":"not_limited"}`}); !errors.Is(err, ErrNotLimited) {
+		t.Fatal(err)
+	}
+	first := last()
+	if err := claim(resp{502, ""}); !errors.As(err, new(resetFailed)) || last() == first {
+		t.Fatal("a claim Anthropic answered for sure is not named again:", err, e.claims())
+	}
+	unsure := last()
+	if err := claim(resp{200, `{"result":"unavailable"}`}); !errors.As(err, new(resetFailed)) || last() != unsure {
+		t.Fatal("a retry names the claim with no sure answer:", err, e.claims())
+	}
+	e.clk.Add(claimRetry)
+	if err := claim(resp{200, `{"result":"cooldown","cooldown_until":"` + e.clk.Now().Add(90*time.Minute).UTC().Format(time.RFC3339) + `"}`}); !errors.Is(err, ErrResetCooldown) ||
+		last() == unsure || !strings.Contains(err.Error(), clockText(e.clk.Now().Add(90*time.Minute), e.clk.Now())) {
+		t.Fatal("past claimRetry a claim is new, and a cooldown says until when:", err, e.claims())
+	}
+	cooled := last()
+
+	e.d.mu.Lock()
+	e.d.acct("b").limitHitUntil = e.clk.Now().Add(time.Hour)
+	e.d.mu.Unlock()
+	err := claim(resp{200, `{"result":"already_used"}`})
+	if !errors.Is(err, ErrResetChanged) || last() == cooled || !strings.Contains(err.Error(), "b") {
+		t.Fatal("already_used on a claim of its own is another's spend, not this one:", err)
+	}
+	e.d.mu.Lock()
+	hit := e.d.acct("b").limitHitUntil
+	e.d.mu.Unlock()
+	if hit.IsZero() {
+		t.Fatal("nothing was reset here: the limit it hit stays")
 	}
 }
 

@@ -1018,9 +1018,10 @@ function loginCell(r, a) {
 // blocks. When the one spent next runs out is in the title.
 function resetMark(r, a) {
   const rs = a.resets, end = rs?.ends_at ? new Date(rs.ends_at) : null, v = r.el.querySelector('.rs-v');
-  const about = !rs ? '' : end ? `${t('rs.count', rs.left)}, ${t('rs.ends', clock(end))}` : t('rs.count', rs.left);
+  const about = !rs ? '' : end ? t('rs.countEnds', rs.left, clock(end)) : t('rs.count', rs.left);
   v.textContent = rs ? `↺ ${num(rs.left)}` : '';
   v.title = about;
+  if (about) v.setAttribute('aria-label', about); else v.removeAttribute('aria-label');
   v.hidden = !rs;
   r.rsGo.hidden = !rs;
   r.rsGo.querySelector('.rs-n').textContent = rs ? num(rs.left) : '';

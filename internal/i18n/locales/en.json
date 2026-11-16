@@ -125,13 +125,15 @@
   "daemon.refresh_failed": "could not refresh the token",
   "daemon.refresh_not_saved": "could not save the refreshed token",
   "daemon.reset_changed": "the reset credits of %[2]s changed meanwhile, %[3]d now: nothing was spent",
-  "daemon.reset_cooldown": "Anthropic wants a pause between resets: try again later",
+  "daemon.reset_cooldown": "Anthropic wants a pause between resets of %[2]s: try again later",
+  "daemon.reset_cooldown_until": "Anthropic wants a pause between resets of %[2]s: try again after %[3]s",
   "daemon.reset_login_refused": "Anthropic refused the login of %s: ccswap refreshes it on its next check",
   "daemon.reset_no_answer": "Anthropic did not answer: trying again is safe, it spends no second credit",
   "daemon.reset_no_org": "ccswap does not know the organization of %[1]s: ccswap login %[1]s",
   "daemon.reset_rate_limited": "Anthropic asks to slow down: try again in a minute",
   "daemon.reset_status": "Anthropic answered %d: trying again is safe",
   "daemon.reset_unconfirmed": "Anthropic did not confirm the reset: check the limits in a minute, trying again is safe",
+  "daemon.reset_used": "this reset credit of %[2]s was already used elsewhere, such as by Claude Code: nothing was spent now",
   "daemon.run_short": "Run the daemon in this terminal",
   "daemon.settings_local_only": "settings can be changed only from this machine, or at [web] admin_url in config.toml",
   "daemon.short": "Manage the daemon",
@@ -814,7 +816,10 @@
     "one": "{0} reset credit",
     "other": "{0} reset credits"
   },
-  "web.rs.ends": "the next runs out {0}",
+  "web.rs.countEnds": {
+    "one": "{0} reset credit, the next runs out {1}",
+    "other": "{0} reset credits, the next runs out {1}"
+  },
   "web.rules.act": "Check the account in use every",
   "web.rules.actHint": "Its limits change as you work; leaving it at the threshold needs fresh numbers.",
   "web.rules.discard": "Discard changes",

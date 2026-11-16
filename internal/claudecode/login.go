@@ -2,6 +2,8 @@ package claudecode
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/exec"
@@ -41,12 +43,14 @@ func AuthCode(s string) string {
 var versionRe = regexp.MustCompile(`\b\d+\.\d+\.\d+\b`)
 
 // Versions reads the version `claude --version` prints, such as 2.1.319, and asks again after an hour,
-// as Claude Code updates itself, or after a minute when claude did not run or printed none; "" then.
+// as Claude Code updates itself, or after a minute when claude did not run or printed none; "" then. A
+// failure is logged once until its cause changes: without a version Anthropic shows no reset credits.
 func Versions() func(context.Context) string {
 	var (
-		mu    sync.Mutex
-		v     string
-		until time.Time
+		mu     sync.Mutex
+		v      string
+		until  time.Time
+		failed string // the last failure logged, "" after a lookup that worked
 	)
 	return func(ctx context.Context) string {
 		mu.Lock()
@@ -64,6 +68,17 @@ func Versions() func(context.Context) string {
 		if err == nil {
 			v = versionRe.FindString(string(out))
 		}
+		why := ""
+		switch {
+		case err != nil:
+			why = err.Error()
+		case v == "":
+			why = fmt.Sprintf("no version in %.80q", strings.TrimSpace(string(out)))
+		}
+		if why != "" && why != failed {
+			slog.Warn("claude --version failed: Anthropic shows no reset credits without it", "bin", Bin(), "err", why)
+		}
+		failed = why
 		if v != "" {
 			until = time.Now().Add(time.Hour)
 		}

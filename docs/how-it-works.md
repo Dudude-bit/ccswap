@@ -180,11 +180,15 @@ Claude Code or another agent. Without a version it is `ccswap/<version>`, as for
 
 A reset (`POST /v1/accounts/{name}/reset`) posts `{"program":"cedar_ember","grant_id":…,"request_id":…}` to
 `/api/organizations/<organizationUuid>/reset_rate_limits`, with the account's access token and the
-organization from its `oauthAccount`. The request id is a hash of the account's email, the grant and the
-count the caller showed, so a retry after a lost answer names the same claim, and Anthropic takes one claim
-per id; the daemon refuses a count other than its own (`reset_changed`), and runs one reset at a time.
-`reset` and `already_used` count as done: the daemon takes one off its count, ends a limit hit's hour, and
-asks the account's usage again before it answers.
+organization from its `oauthAccount`. Each claim has a random request id, as Claude Code's do. A claim
+Anthropic gave no sure answer to (no answer, a `5xx`, `unavailable`, or `cooldown` to a retry) keeps its id
+for 10 minutes, and a retry of the same grant names it again: Anthropic takes one claim per id, so a claim
+that landed spends nothing more and answers `already_used`. Any other answer settles the claim, and the next
+gets a new id. The daemon refuses a count other than its own (`reset_changed`), and runs one reset at a
+time. `reset`, and `already_used` to a retry, count as done: the daemon sets its count from Anthropic's
+`resets_left`, or takes one off it, ends a limit hit's hour, and asks the account's usage again before it
+answers. `already_used` to a new claim means another claim, such as Claude Code's at its limit, spent the
+credit first: nothing was spent now (`reset_changed`). A `cooldown` says until when from `cooldown_until`.
 
 - **Which token:** for the account Claude Code holds, the access token in Claude Code's item, read only;
   for the others, their vault copy. An account without a live access token is not asked; for the

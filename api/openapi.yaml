@@ -106,9 +106,10 @@ paths:
       description: >-
         Spend one of the account's reset credits (Account.resets): Anthropic clears its usage limits at once, as
         Claude Code offers at a limit. left is the count the caller showed; another count here refuses it
-        (reset_changed), so a second click elsewhere spends no second credit. A retry of a reset whose answer was
-        lost is safe, as Anthropic takes one claim per credit and count. The answer comes once the account's usage
-        was asked again, so it shows the cleared limits when Anthropic allows the ask.
+        (reset_changed), so a second click elsewhere spends no second credit. A retry within 10 minutes of a reset
+        Anthropic gave no sure answer to names the same claim, and Anthropic takes one claim per id, so it spends no
+        second credit. The answer comes once the account's usage was asked again, so it shows the cleared limits
+        when Anthropic allows the ask.
       requestBody:
         required: true
         content: {application/json: {schema: {$ref: "#/components/schemas/UseResetRequest"}}}
@@ -416,9 +417,10 @@ components:
             was used, was replaced or the daemon restarted), wrong_account (login code: the sign-in was another account's; the link is spent),
             login_pending (login: another link of the account waits for its code, until it is used or its 10 minutes run out),
             no_reset_credit (reset: the account has no reset credit left, as ccswap last saw or as Anthropic says),
-            reset_changed (reset: the account's reset credits changed since the caller showed them; nothing was spent),
-            not_limited (reset: Anthropic spends this credit only at a limit), reset_cooldown (reset: Anthropic wants a
-            pause between resets; the message says until when, if it said),
+            reset_changed (reset: the account's reset credits changed since the caller showed them, or another claim,
+            such as Claude Code's, spent the credit first; nothing was spent), not_limited (reset: Anthropic spends
+            this credit only at a limit), reset_cooldown (reset: Anthropic wants a pause between resets; the message
+            says until when, if Anthropic said),
             migrate_active (migrate: the account, or its login, is the one Claude Code uses), export_gone (migrate: no such
             export: cancelled, expired, or forgotten by a daemon restart, possibly after its commit landed, so check
             whether the accounts are still here), export_done (migrate cancel: the export is committed already),

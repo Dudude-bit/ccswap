@@ -128,6 +128,8 @@ func key(s string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyEnter}
 	case "down":
 		return tea.KeyPressMsg{Code: tea.KeyDown}
+	case "space":
+		return tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
 	case "ctrl+c":
 		return tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	}
@@ -806,6 +808,30 @@ func TestTinyTerminalScrollsTheTable(t *testing.T) {
 	if n := strings.Count(v, "\n"); n > 9 || !strings.Contains(v, "old") || strings.Contains(v, " work ") ||
 		!strings.Contains(v, i18n.T("tui.more_rows", "↑ 1")) {
 		t.Fatalf("the table scrolls to the selected account and counts the rest:\n%s", v)
+	}
+}
+
+func TestHelpKeysFollowWhatShows(t *testing.T) {
+	f := fixture()
+	m := loadedAt(t, f, 100)
+	m, _ = send(m, key("?"))
+	sel := m.(*Model).sel
+	if m, _ = send(m, key("down")); m.(*Model).sel == sel {
+		t.Fatal("with the table above help, the arrows still select")
+	}
+	m, _ = send(m, tea.WindowSizeMsg{Width: 80, Height: 12})
+	sel = m.(*Model).sel
+	for _, k := range []string{"enter", "space", "+", "-", "R", "t", "w", "l", "down"} {
+		var cmd tea.Cmd
+		if m, cmd = send(m, key(k)); cmd != nil {
+			m = run(t, m, cmd)
+		}
+	}
+	if len(f.acts) != 0 || len(f.enabled) != 0 || m.(*Model).sel != sel || m.(*Model).mode != modeList || !m.(*Model).help {
+		t.Fatalf("help alone hides the table, so no key acts on an account: acts %v enabled %v mode %v\n%s", f.acts, f.enabled, m.(*Model).mode, text(m))
+	}
+	if _, cmd := send(m, key("q")); cmd == nil {
+		t.Fatal("q still quits")
 	}
 }
 

@@ -309,24 +309,35 @@ func (m *Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	if m.help {
+		_, alone := m.helpScreen(max(40, m.width), time.Now())
+		alone = alone && m.loaded && len(m.accts) > 0
 		switch s {
 		case "?", "esc":
 			m.help = false
 			return m, nil
 		case "up", "k":
-			starts := m.helpStarts(max(40, m.width))
-			if i := slices.IndexFunc(starts, func(s int) bool { return s >= m.helpTop }); i > 0 {
-				m.helpTop = starts[i-1]
-			} else if i < 0 && len(starts) > 0 {
-				m.helpTop = starts[len(starts)-1]
+			if alone {
+				starts := m.helpStarts(max(40, m.width))
+				if i := slices.IndexFunc(starts, func(s int) bool { return s >= m.helpTop }); i > 0 {
+					m.helpTop = starts[i-1]
+				} else if i < 0 && len(starts) > 0 {
+					m.helpTop = starts[len(starts)-1]
+				}
+				return m, nil
 			}
-			return m, nil
 		case "down", "j":
-			starts := m.helpStarts(max(40, m.width))
-			if i := slices.IndexFunc(starts, func(s int) bool { return s > m.helpTop }); i >= 0 {
-				m.helpTop = starts[i]
+			if alone {
+				starts := m.helpStarts(max(40, m.width))
+				if i := slices.IndexFunc(starts, func(s int) bool { return s > m.helpTop }); i >= 0 {
+					m.helpTop = starts[i]
+				}
+				return m, nil
 			}
-			return m, nil
+		case "q", "r":
+		default:
+			if alone { // help hides the table: nothing on screen says which account a key would act on
+				return m, nil
+			}
 		}
 	}
 	a, ok := m.selected()

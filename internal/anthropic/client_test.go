@@ -178,15 +178,24 @@ func TestReset(t *testing.T) {
 		w.Write([]byte(result))
 	})
 	c.ClaudeVersion = func(context.Context) string { return "2.1.319" }
-	if s, r, err := c.Reset(context.Background(), "tok", "org/1", "launch", "req"); err != nil || s != 200 || r != "reset" {
+	if s, r, err := c.Reset(context.Background(), "tok", "org/1", "launch", "req"); err != nil || s != 200 || r.Result != "reset" || r.Left != nil || !r.CooldownUntil.IsZero() {
 		t.Fatal(s, r, err)
 	}
-	result = `{"result":"cooldown"}`
-	if _, r, err := c.Reset(context.Background(), "tok", "org/1", "launch", "req"); err != nil || r != "cooldown" {
+	result = `{"result":"reset","resets_left":0}`
+	if _, r, err := c.Reset(context.Background(), "tok", "org/1", "launch", "req"); err != nil || r.Left == nil || *r.Left != 0 {
 		t.Fatal(r, err)
 	}
+	result = `{"result":"cooldown","cooldown_until":"2026-11-16T12:30:00Z"}`
+	if _, r, err := c.Reset(context.Background(), "tok", "org/1", "launch", "req"); err != nil || r.Result != "cooldown" ||
+		!r.CooldownUntil.Equal(time.Date(2026, 11, 16, 12, 30, 0, 0, time.UTC)) {
+		t.Fatal(r, err)
+	}
+	result = `{"result":"cooldown","cooldown_until":"soon"}`
+	if _, r, err := c.Reset(context.Background(), "tok", "org/1", "launch", "req"); err != nil || r.Result != "cooldown" || !r.CooldownUntil.IsZero() {
+		t.Fatal("an unreadable time is not said:", r, err)
+	}
 	result, status = `slow down`, 429
-	if s, r, err := c.Reset(context.Background(), "tok", "org/1", "launch", "req"); err != nil || s != 429 || r != "" {
+	if s, r, err := c.Reset(context.Background(), "tok", "org/1", "launch", "req"); err != nil || s != 429 || r.Result != "" {
 		t.Fatal(s, r, err)
 	}
 	result, status = `{}`, 200

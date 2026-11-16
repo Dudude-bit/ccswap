@@ -99,6 +99,7 @@ type acctUsage struct {
 	noFiveHour         bool
 	models             []anthropic.ModelWindow
 	resets             []anthropic.ResetCredit // reset credits as of checkedAt, the one spent next first
+	claim              resetClaim              // a reset claim with no sure answer yet, which a retry names again
 	checkedAt          time.Time
 	err                string
 	refreshErr         string // err as a failed refresh set it, which the next refresh that works clears
