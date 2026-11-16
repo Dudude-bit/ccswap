@@ -128,7 +128,7 @@ func (d *Daemon) takeRemote(name string, ra api.Account, maxAge time.Duration) b
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	u := d.acct(name)
-	if u.checkedAt.After(at) { // asked here since: keep the newer numbers
+	if u.checkedAt.After(at) || at.Before(u.spentAt) { // asked here since, or from before a reset: keep the newer numbers
 		return true
 	}
 	u.fiveHour, u.noFiveHour, u.sevenDay, u.models, u.resets, u.checkedAt, u.err = us.FiveHour, us.NoFiveHour, us.SevenDay, us.Models, us.Resets, at, ""

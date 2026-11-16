@@ -186,8 +186,9 @@ for 10 minutes, and a retry of the same grant names it again: Anthropic takes on
 that landed spends nothing more and answers `already_used`. Any other answer settles the claim, and the next
 gets a new id. The daemon refuses a count other than its own (`reset_changed`), and runs one reset at a
 time. `reset`, and `already_used` to a retry, count as done: the daemon sets its count from Anthropic's
-`resets_left`, or takes one off it, ends a limit hit's hour, and asks the account's usage again before it
-answers. `already_used` to a new claim means another claim, such as Claude Code's at its limit, spent the
+`resets_left`, or takes one off it (a retry's `already_used` only when the count does not show the first
+claim's spend yet), ends a limit hit's hour, and asks the account's usage again before it answers. Usage
+asked before the reset was confirmed, here or by a remote ccswap, is dropped so it cannot undo the spend. `already_used` to a new claim means another claim, such as Claude Code's at its limit, spent the
 credit first: nothing was spent now (`reset_changed`). A `cooldown` says until when from `cooldown_until`.
 
 - **Which token:** for the account Claude Code holds, the access token in Claude Code's item, read only;

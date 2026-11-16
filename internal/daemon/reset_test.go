@@ -142,6 +142,76 @@ func TestResetClaimIDs(t *testing.T) {
 	}
 }
 
+func TestResetRetryCountsTheFirstSpendOnce(t *testing.T) {
+	e := withResets(t)
+	e.api.set(func(f *fakeAnthropic) {
+		f.usage["atB"] = usageResets(100, "launch", grant("launch", 2))
+	})
+	e.poll()
+	e.api.set(func(f *fakeAnthropic) { f.resets = []resp{{502, ""}, {200, `{"result":"already_used"}`}} })
+	if _, err := e.d.UseReset(context.Background(), "b", 2); !errors.As(err, new(resetFailed)) {
+		t.Fatal(err)
+	}
+	e.d.awaitAsk(context.Background(), "b")
+	e.api.set(func(f *fakeAnthropic) { f.usage["atB"] = usageResets(0, "launch", grant("launch", 1)) }) // the first claim landed
+	if _, err := e.d.fetch(context.Background(), "b", "atB"); err != nil {
+		t.Fatal(err)
+	}
+	a, err := e.d.UseReset(context.Background(), "b", 1)
+	if err != nil || a.Resets == nil || a.Resets.Left != 1 {
+		t.Fatalf("a count that shows the first claim's spend keeps it, once: %+v %v", a.Resets, err)
+	}
+
+	e = withResets(t)
+	e.api.set(func(f *fakeAnthropic) {
+		f.usage["atB"] = usageResets(100, "launch", grant("launch", 2))
+	})
+	e.poll()
+	e.api.set(func(f *fakeAnthropic) {
+		f.resets = []resp{{502, ""}, {200, `{"result":"already_used"}`}}
+		f.usage["atB"] = resp{429, ""} // no ask shows the spend
+	})
+	if _, err := e.d.UseReset(context.Background(), "b", 2); !errors.As(err, new(resetFailed)) {
+		t.Fatal(err)
+	}
+	if a, err := e.d.UseReset(context.Background(), "b", 2); err != nil || a.Resets == nil || a.Resets.Left != 1 {
+		t.Fatalf("a count that does not show it yet takes it off: %+v %v", a.Resets, err)
+	}
+}
+
+func TestUsageAskedBeforeAResetDoesNotUndoIt(t *testing.T) {
+	e := withResets(t)
+	e.api.set(func(f *fakeAnthropic) {
+		f.onUsage = func(string) { // a reset lands while this ask is out
+			e.d.mu.Lock()
+			u := e.d.acct("b")
+			u.resets, u.spentAt = withLeft(u.resets, "launch", 0), e.clk.Now().Add(time.Second)
+			e.d.mu.Unlock()
+		}
+	})
+	if _, err := e.d.fetch(context.Background(), "b", "atB"); err != nil {
+		t.Fatal(err)
+	}
+	e.api.set(func(f *fakeAnthropic) { f.onUsage = nil })
+	if r := e.view("b").Resets; r == nil || r.Left != 1 || r.Credit != "tenure" {
+		t.Fatal("an answer asked before the reset keeps the spend:", r)
+	}
+	at := e.clk.Now()
+	if !e.d.takeRemote("b", api.Account{CheckedAt: &at, Resets: &api.Resets{Left: 2, Credit: "launch"}}, time.Hour) {
+		t.Fatal("numbers from before the reset count as kept")
+	}
+	if r := e.view("b").Resets; r == nil || r.Left != 1 {
+		t.Fatal("another ccswap's numbers from before the reset keep the spend:", r)
+	}
+	e.clk.Add(2 * time.Second)
+	if _, err := e.d.fetch(context.Background(), "b", "atB"); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.view("b").Resets; r == nil || r.Left != 2 {
+		t.Fatal("an ask after the reset says what Anthropic has:", r)
+	}
+}
+
 func TestResetRefusals(t *testing.T) {
 	e := withResets(t)
 	for _, tc := range []struct {

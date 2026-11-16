@@ -35,6 +35,7 @@ const claimRetry = 10 * time.Minute
 // resetClaim is a reset claim Anthropic gave no sure answer to; the zero value is none.
 type resetClaim struct {
 	credit, id string
+	left       int       // the resets the grant had when it was first sent
 	at         time.Time // when it was first sent
 }
 
@@ -116,11 +117,12 @@ func (d *Daemon) UseReset(ctx context.Context, name string, left int) (api.Accou
 	u := d.acct(name)
 	retry := u.claim.credit == credit.ID && now.Sub(u.claim.at) < claimRetry
 	if !retry {
-		u.claim = resetClaim{credit.ID, rand.Text(), now}
+		u.claim = resetClaim{credit.ID, rand.Text(), credit.Left, now}
 	}
 	claim := u.claim
 	d.mu.Unlock()
 	status, res, err := d.o.API.Reset(d.tickCtx(ctx), tok, oa.Org, credit.ID, claim.id)
+	answered := d.o.Now()
 	if err != nil || res.Result != "reset" && res.Result != "already_used" {
 		slog.Warn("reset: not confirmed", "account", name, "credit", credit.ID, "retry", retry, "status", status, "result", res.Result, "err", err)
 	}
@@ -136,7 +138,7 @@ func (d *Daemon) UseReset(ctx context.Context, name string, left int) (api.Accou
 		d.mu.Unlock()
 	}
 	// reask shows, once the account's usage was asked again, whether a claim landed.
-	reask := func() { go d.reask(d.tickCtx(ctx), name, holder) }
+	reask := func() { go d.reask(d.tickCtx(ctx), name) }
 	switch {
 	case status == 0:
 		reask()
@@ -185,26 +187,30 @@ func (d *Daemon) UseReset(ctx context.Context, name string, left int) (api.Accou
 		return api.Account{}, resetFailed{i18n.Err("daemon.reset_unconfirmed")}
 	}
 	settled()
-	n := credit.Left - 1
+	n := credit.Left - 1              // this claim's spend
+	if res.Result == "already_used" { // a retry: the first claim's spend, which the count may show already
+		n = min(credit.Left, claim.left-1)
+	}
 	if res.Left != nil {
 		n = *res.Left
 	}
 	slog.Info("reset credit spent", "account", name, "credit", credit.ID, "retry", retry, "grant_left", n)
 	d.mu.Lock()
 	u = d.acct(name)
-	if res.Result == "reset" || res.Left != nil { // a retry's first claim may show in the count already
-		u.resets = withLeft(u.resets, credit.ID, n)
-	}
+	u.resets = withLeft(u.resets, credit.ID, n)
+	u.spentAt = answered          // an ask in flight from before the reset must not undo it
 	u.limitHitUntil = time.Time{} // the limit it hit is cleared
 	d.mu.Unlock()
-	d.reask(ctx, name, holder)
+	d.reask(ctx, name)
 	d.requestTick()
 	return d.viewOf(name)
 }
 
-// reask asks name's usage now, after any ask in flight, whose numbers may be from before.
-func (d *Daemon) reask(ctx context.Context, name, holder string) {
+// reask asks name's usage now, after any ask in flight, whose numbers may be from before. It reads which
+// account Claude Code holds after that wait, as a switch may have landed meanwhile.
+func (d *Daemon) reask(ctx context.Context, name string) {
 	d.awaitAsk(ctx, name)
+	holder := d.holderNow()
 	d.mu.Lock()
 	d.acct(name).asked = time.Time{}
 	d.mu.Unlock()
