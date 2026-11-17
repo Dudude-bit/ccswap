@@ -28,7 +28,10 @@ type Client struct {
 	HTTP                        *http.Client
 	APIBase, TokenURL, ClientID string
 	UserAgent                   string
-	Now                         func() time.Time
+	// ClaudeVersion is the version of the claude installed here, "" when unknown; usage and resets
+	// are asked as that Claude Code.
+	ClaudeVersion func(context.Context) string
+	Now           func() time.Time
 }
 
 func New() *Client {

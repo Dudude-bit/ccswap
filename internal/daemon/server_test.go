@@ -73,6 +73,10 @@ func (f *fakeCore) RefreshLogin(_ context.Context, n string) (api.Account, error
 	f.rec("refresh login " + n)
 	return api.Account{Name: n}, f.err
 }
+func (f *fakeCore) UseReset(_ context.Context, n string, left int) (api.Account, error) {
+	f.rec(fmt.Sprintf("reset %s left=%d", n, left))
+	return api.Account{Name: n}, f.err
+}
 func (f *fakeCore) StartLogin(_ context.Context, n string, replace bool) (api.LoginLink, error) {
 	f.rec(fmt.Sprintf("start login %s replace=%v", n, replace))
 	return api.LoginLink{Id: "L1", Url: "https://claude.example/oauth/authorize?state=s"}, f.err
@@ -326,6 +330,11 @@ func TestErrorMapping(t *testing.T) {
 		{ErrNoUpdate, 409, "no_update"},
 		{ErrUpdating, 409, "updating"},
 		{updateError{i18n.Err("update.github_status", 503)}, 502, "update_failed"},
+		{i18n.Err("daemon.no_reset_credit", ErrNoResetCredit, "b"), 409, "no_reset_credit"},
+		{i18n.Err("daemon.reset_changed", ErrResetChanged, "b", 1), 409, "reset_changed"},
+		{i18n.Err("daemon.not_limited", ErrNotLimited, "b"), 409, "not_limited"},
+		{ErrResetCooldown, 409, "reset_cooldown"},
+		{resetFailed{i18n.Err("daemon.reset_no_answer")}, 502, "reset_failed"},
 		{os.ErrPermission, 500, "internal"},
 	} {
 		c, e := classify(tc.err)
@@ -571,6 +580,7 @@ var (
 		{"PATCH", "/v1/accounts/a", `{"priority":3}`},
 		{"POST", "/v1/accounts/a/activate", ""},
 		{"POST", "/v1/accounts/a/refresh", ""},
+		{"POST", "/v1/accounts/a/reset", `{"left":2}`},
 		{"PUT", "/v1/auto", `{"enabled":true}`},
 		{"PUT", "/v1/strategy", `{"strategy":"cache-aware"}`},
 		{"PUT", "/v1/thresholds", `{"five_hour":90,"seven_day":97,"hysteresis":5,"min_dwell_seconds":60}`},

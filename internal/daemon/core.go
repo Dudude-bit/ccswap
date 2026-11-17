@@ -98,6 +98,10 @@ type acctUsage struct {
 	fiveHour, sevenDay *anthropic.Window
 	noFiveHour         bool
 	models             []anthropic.ModelWindow
+	resets             []anthropic.ResetCredit // reset credits as of checkedAt, the one spent next first
+	claim              resetClaim              // a reset claim with no sure answer yet, which a retry names again
+	spentAt            time.Time               // when a reset was last confirmed: usage asked before it would undo it
+	unseen             anthropic.ResetCredit   // a grant's count after a reset here a remote ccswap has not shown yet; no ID: none
 	checkedAt          time.Time
 	err                string
 	refreshErr         string // err as a failed refresh set it, which the next refresh that works clears
@@ -130,6 +134,7 @@ type Daemon struct {
 	svc, kcAcct string // Claude Code's entry
 	im          *Importer
 	tick        sync.Mutex    // one tick at a time
+	resetMu     sync.Mutex    // one reset at a time, so a second click sees what the first spent
 	kick        chan struct{} // pending tick request; capacity 1 coalesces
 	thr         atomic.Pointer[config.Thresholds]
 	bus         broadcast  // tells event streams that status or accounts may have changed
@@ -1056,6 +1061,7 @@ func (d *Daemon) fetch(ctx context.Context, name, tok string) (anthropic.UsageRe
 		u.asked = asked
 	}
 	pace := d.paceLocked(name)
+	stale := err == nil && res.Status/100 == 2 && asked.Before(u.spentAt)
 	switch {
 	case err != nil && res.Status == 0:
 		u.err = i18n.T("daemon.no_connection")
@@ -1067,8 +1073,9 @@ func (d *Daemon) fetch(ctx context.Context, name, tok string) (anthropic.UsageRe
 		u.err = i18n.T("daemon.rate_limited", u.retryAt.Local().Format("15:04"))
 	case res.Status/100 != 2:
 		u.err = i18n.T("daemon.anthropic_answered", res.Status)
+	case stale: // asked before a reset landed: the ask after the reset has its numbers
 	default:
-		u.fiveHour, u.noFiveHour, u.sevenDay, u.models = res.Usage.FiveHour, res.Usage.NoFiveHour, res.Usage.SevenDay, res.Usage.Models
+		u.fiveHour, u.noFiveHour, u.sevenDay, u.models, u.resets = res.Usage.FiveHour, res.Usage.NoFiveHour, res.Usage.SevenDay, res.Usage.Models, res.Usage.Resets
 		u.checkedAt, u.err = now, ""
 		u.sample()
 		if u.calm++; u.calm >= calmAnswers && u.every > 0 { // probe whether the endpoint eased up
@@ -1078,7 +1085,7 @@ func (d *Daemon) fetch(ctx context.Context, name, tok string) (anthropic.UsageRe
 		}
 	}
 	// a 429 is transient: T3 keeps the last real answer
-	if res.Status != 0 && (res.Status != http.StatusTooManyRequests || u.rawStatus == 0) {
+	if res.Status != 0 && !stale && (res.Status != http.StatusTooManyRequests || u.rawStatus == 0) {
 		u.rawStatus, u.rawBody, u.rawAt = res.Status, res.Body, now
 	}
 	failed := u.err != ""
@@ -1510,6 +1517,12 @@ func (d *Daemon) view(st store.State, a store.Account) api.Account {
 	}
 	for _, m := range u.models {
 		v.Models = append(v.Models, api.ModelWindow{Name: m.Name, Utilization: m.Utilization, ResetsAt: timePtr(m.ResetsAt)})
+	}
+	if c := liveCredits(u.resets, now); len(c) > 0 && !a.NeedsLogin {
+		v.Resets = &api.Resets{Left: creditsLeft(c), EndsAt: timePtr(c[0].EndsAt)}
+		for _, g := range c {
+			v.Resets.Grants = append(v.Resets.Grants, api.ResetGrant{Id: g.ID, Left: g.Left, EndsAt: timePtr(g.EndsAt)})
+		}
 	}
 	return v
 }

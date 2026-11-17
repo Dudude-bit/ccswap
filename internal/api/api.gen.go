@@ -68,9 +68,12 @@ type Account struct {
 	NeedsLogin     bool          `json:"needs_login"`
 
 	// NoFiveHourLimit Anthropic's last answer has a weekly window and a null five-hour one: this plan has no such limit, as a verified Ultra has none. False before the first answer, or with a five_hour missing or unreadable, which say nothing of the plan
-	NoFiveHourLimit bool    `json:"no_five_hour_limit"`
-	Priority        int     `json:"priority"`
-	SevenDay        *Window `json:"seven_day,omitempty"`
+	NoFiveHourLimit bool `json:"no_five_hour_limit"`
+	Priority        int  `json:"priority"`
+
+	// Resets The account's reset credits, which /v1/accounts/{name}/reset spends: grants of limit resets Anthropic gave it, such as one at a model launch. Absent when it has none usable now, while it needs a login, and before Anthropic said; Anthropic says only to a recent Claude Code, whose version the daemon sends.
+	Resets   *Resets `json:"resets,omitempty"`
+	SevenDay *Window `json:"seven_day,omitempty"`
 
 	// TokenExpiresAt When the login's access token runs out: for the account in Claude Code, the token Claude Code holds and refreshes; for the others, ccswap's copy, which the daemon refreshes 10 minutes before. Absent while it needs a login or the daemon has not read it yet.
 	TokenExpiresAt *time.Time `json:"token_expires_at,omitempty"`
@@ -135,6 +138,11 @@ type Error struct {
 	// login_gone (login code: no link of the account with this id waits for a code, as none was started, or it expired,
 	// was used, was replaced or the daemon restarted), wrong_account (login code: the sign-in was another account's; the link is spent),
 	// login_pending (login: another link of the account waits for its code, until it is used or its 10 minutes run out),
+	// no_reset_credit (reset: the account has no reset credit left, as ccswap last saw or as Anthropic says),
+	// reset_changed (reset: the account's reset credits changed since the caller showed them, or another claim,
+	// such as Claude Code's, spent the credit first; nothing was spent), not_limited (reset: Anthropic spends
+	// this credit only at a limit), reset_cooldown (reset: Anthropic wants a pause between resets; the message
+	// says until when, if Anthropic said),
 	// migrate_active (migrate: the account, or its login, is the one Claude Code uses), export_gone (migrate: no such
 	// export: cancelled, expired, or forgotten by a daemon restart, possibly after its commit landed, so check
 	// whether the accounts are still here), export_done (migrate cancel: the export is committed already),
@@ -150,7 +158,8 @@ type Error struct {
 	// refused for another reason than a spent login; the daemon tries again on its next tick),
 	// login_failed (login: claude auth login did not start, gave no link or did not answer the code in time),
 	// update_failed (update: GitHub failed, the download did not match its checksum, the new binary did not run, or
-	// the old one could not be replaced; nothing changed).
+	// the old one could not be replaced; nothing changed), reset_failed (reset: Anthropic did not answer, refused
+	// the login, asked to slow down or could not confirm the reset; trying again is safe).
 	Code string `json:"code"`
 
 	// Message A detail; clients show their own text per code
@@ -272,6 +281,30 @@ type RemoteRequest struct {
 
 	// Url https://..., or http to a loopback or private address; empty turns remote usage off
 	Url string `json:"url"`
+}
+
+// ResetGrant defines model for ResetGrant.
+type ResetGrant struct {
+	// EndsAt When it runs out; absent when it does not
+	EndsAt *time.Time `json:"ends_at,omitempty"`
+
+	// Id Anthropic's id of the grant
+	Id string `json:"id"`
+
+	// Left Resets left of it
+	Left int `json:"left"`
+}
+
+// Resets The account's reset credits, which /v1/accounts/{name}/reset spends: grants of limit resets Anthropic gave it, such as one at a model launch. Absent when it has none usable now, while it needs a login, and before Anthropic said; Anthropic says only to a recent Claude Code, whose version the daemon sends.
+type Resets struct {
+	// EndsAt When the grant a reset spends next runs out; absent when it does not
+	EndsAt *time.Time `json:"ends_at,omitempty"`
+
+	// Grants The grants left, the one a reset spends next first; ccswap remote takes them from here
+	Grants []ResetGrant `json:"grants"`
+
+	// Left Resets the account can spend now
+	Left int `json:"left"`
 }
 
 // Restart defines model for Restart.
@@ -401,6 +434,12 @@ type Thresholds struct {
 	SevenDay        float64 `json:"seven_day"`
 }
 
+// UseResetRequest defines model for UseResetRequest.
+type UseResetRequest struct {
+	// Left The resets.left the caller showed
+	Left int `json:"left"`
+}
+
 // WebCode defines model for WebCode.
 type WebCode struct {
 	Code      string    `json:"code"`
@@ -451,6 +490,9 @@ type PatchAccountJSONRequestBody = AccountPatch
 
 // FinishLoginJSONRequestBody defines body for FinishLogin for application/json ContentType.
 type FinishLoginJSONRequestBody = LoginCode
+
+// UseResetJSONRequestBody defines body for UseReset for application/json ContentType.
+type UseResetJSONRequestBody = UseResetRequest
 
 // SetAutoJSONRequestBody defines body for SetAuto for application/json ContentType.
 type SetAutoJSONRequestBody = AutoRequest
@@ -629,6 +671,18 @@ type ClientInterface interface {
 	//
 	// Refresh the account's login now, as the daemon does 10 minutes before its access token runs out: a new access token, which also proves the login still works. It does not move login_expires_at. Never the login Claude Code uses (claude_owns), which Claude Code refreshes itself. An account refreshed under a minute ago is not asked again.
 	RefreshLogin(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UseResetWithBody performs a POST /v1/accounts/{name}/reset (the `UseReset` operationId) request,
+	// with any type of body and a specified content type.
+	//
+	// Spend one of the account's reset credits (Account.resets): Anthropic clears its usage limits at once, as Claude Code offers at a limit. left is the count the caller showed; another count here refuses it (reset_changed), so a second click elsewhere spends no second credit. A retry within 10 minutes of a reset Anthropic gave no sure answer to names the same claim, and Anthropic takes one claim per id, so it spends no second credit. The answer comes once the account's usage was asked again, so it shows the cleared limits when Anthropic allows the ask.
+	UseResetWithBody(ctx context.Context, name string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UseReset performs a POST /v1/accounts/{name}/reset (the `UseReset` operationId) request.
+	// Takes a body of the `application/json` content type.
+	//
+	// Spend one of the account's reset credits (Account.resets): Anthropic clears its usage limits at once, as Claude Code offers at a limit. left is the count the caller showed; another count here refuses it (reset_changed), so a second click elsewhere spends no second credit. A retry within 10 minutes of a reset Anthropic gave no sure answer to names the same claim, and Anthropic takes one claim per id, so it spends no second credit. The answer comes once the account's usage was asked again, so it shows the cleared limits when Anthropic allows the ask.
+	UseReset(ctx context.Context, name string, body UseResetJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// SetAutoWithBody performs a PUT /v1/auto (the `SetAuto` operationId) request,
 	// with any type of body and a specified content type.
@@ -988,6 +1042,38 @@ func (c *Client) FinishLogin(ctx context.Context, name string, body FinishLoginJ
 // Refresh the account's login now, as the daemon does 10 minutes before its access token runs out: a new access token, which also proves the login still works. It does not move login_expires_at. Never the login Claude Code uses (claude_owns), which Claude Code refreshes itself. An account refreshed under a minute ago is not asked again.
 func (c *Client) RefreshLogin(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewRefreshLoginRequest(c.Server, name)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// UseResetWithBody performs a POST /v1/accounts/{name}/reset (the `UseReset` operationId) request,
+// with any type of body and a specified content type.
+//
+// Spend one of the account's reset credits (Account.resets): Anthropic clears its usage limits at once, as Claude Code offers at a limit. left is the count the caller showed; another count here refuses it (reset_changed), so a second click elsewhere spends no second credit. A retry within 10 minutes of a reset Anthropic gave no sure answer to names the same claim, and Anthropic takes one claim per id, so it spends no second credit. The answer comes once the account's usage was asked again, so it shows the cleared limits when Anthropic allows the ask.
+func (c *Client) UseResetWithBody(ctx context.Context, name string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUseResetRequestWithBody(c.Server, name, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// UseReset performs a POST /v1/accounts/{name}/reset (the `UseReset` operationId) request.
+// Takes a body of the `application/json` content type.
+//
+// Spend one of the account's reset credits (Account.resets): Anthropic clears its usage limits at once, as Claude Code offers at a limit. left is the count the caller showed; another count here refuses it (reset_changed), so a second click elsewhere spends no second credit. A retry within 10 minutes of a reset Anthropic gave no sure answer to names the same claim, and Anthropic takes one claim per id, so it spends no second credit. The answer comes once the account's usage was asked again, so it shows the cleared limits when Anthropic allows the ask.
+func (c *Client) UseReset(ctx context.Context, name string, body UseResetJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUseResetRequest(c.Server, name, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1878,6 +1964,53 @@ func NewRefreshLoginRequest(server string, name string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewUseResetRequest calls the generic UseReset builder with application/json body
+func NewUseResetRequest(server string, name string, body UseResetJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUseResetRequestWithBody(server, name, "application/json", bodyReader)
+}
+
+// NewUseResetRequestWithBody constructs an http.Request for the UseReset method, with any body, and a specified content type
+func NewUseResetRequestWithBody(server string, name string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "name", name, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/accounts/%s/reset", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewSetAutoRequest calls the generic SetAuto builder with application/json body
 func NewSetAutoRequest(server string, body SetAutoJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -2673,6 +2806,20 @@ type ClientWithResponsesInterface interface {
 	//
 	// Returns a wrapper object for the known response body format(s).
 	RefreshLoginWithResponse(ctx context.Context, name string, reqEditors ...RequestEditorFn) (*RefreshLoginResponse, error)
+
+	// UseResetWithBodyWithResponse performs a POST /v1/accounts/{name}/reset (the `UseReset` operationId) request,
+	// with any type of body and a specified content type.
+	//
+	// Spend one of the account's reset credits (Account.resets): Anthropic clears its usage limits at once, as Claude Code offers at a limit. left is the count the caller showed; another count here refuses it (reset_changed), so a second click elsewhere spends no second credit. A retry within 10 minutes of a reset Anthropic gave no sure answer to names the same claim, and Anthropic takes one claim per id, so it spends no second credit. The answer comes once the account's usage was asked again, so it shows the cleared limits when Anthropic allows the ask.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	UseResetWithBodyWithResponse(ctx context.Context, name string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UseResetResponse, error)
+
+	// UseResetWithResponse performs a POST /v1/accounts/{name}/reset (the `UseReset` operationId) request.
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Spend one of the account's reset credits (Account.resets): Anthropic clears its usage limits at once, as Claude Code offers at a limit. left is the count the caller showed; another count here refuses it (reset_changed), so a second click elsewhere spends no second credit. A retry within 10 minutes of a reset Anthropic gave no sure answer to names the same claim, and Anthropic takes one claim per id, so it spends no second credit. The answer comes once the account's usage was asked again, so it shows the cleared limits when Anthropic allows the ask.
+	UseResetWithResponse(ctx context.Context, name string, body UseResetJSONRequestBody, reqEditors ...RequestEditorFn) (*UseResetResponse, error)
 
 	// SetAutoWithBodyWithResponse performs a PUT /v1/auto (the `SetAuto` operationId) request,
 	// with any type of body and a specified content type.
@@ -3491,6 +3638,75 @@ func (r RefreshLoginResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r RefreshLoginResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type UseResetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *Account
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *Error
+	// JSON409 the response for an HTTP 409 `application/json` response
+	JSON409 *Error
+	// JSON500 the response for an HTTP 500 `application/json` response
+	JSON500 *Error
+	// JSON502 the response for an HTTP 502 `application/json` response
+	JSON502 *Error
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r UseResetResponse) GetJSON200() *Account {
+	return r.JSON200
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r UseResetResponse) GetJSON404() *Error {
+	return r.JSON404
+}
+
+// GetJSON409 returns the response for an HTTP 409 `application/json` response
+func (r UseResetResponse) GetJSON409() *Error {
+	return r.JSON409
+}
+
+// GetJSON500 returns the response for an HTTP 500 `application/json` response
+func (r UseResetResponse) GetJSON500() *Error {
+	return r.JSON500
+}
+
+// GetJSON502 returns the response for an HTTP 502 `application/json` response
+func (r UseResetResponse) GetJSON502() *Error {
+	return r.JSON502
+}
+
+// GetBody returns the raw response body bytes
+func (r UseResetResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r UseResetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UseResetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UseResetResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -4647,6 +4863,32 @@ func (c *ClientWithResponses) RefreshLoginWithResponse(ctx context.Context, name
 	return ParseRefreshLoginResponse(rsp)
 }
 
+// UseResetWithBodyWithResponse performs a POST /v1/accounts/{name}/reset (the `UseReset` operationId) request,
+// with any type of body and a specified content type.
+//
+// Spend one of the account's reset credits (Account.resets): Anthropic clears its usage limits at once, as Claude Code offers at a limit. left is the count the caller showed; another count here refuses it (reset_changed), so a second click elsewhere spends no second credit. A retry within 10 minutes of a reset Anthropic gave no sure answer to names the same claim, and Anthropic takes one claim per id, so it spends no second credit. The answer comes once the account's usage was asked again, so it shows the cleared limits when Anthropic allows the ask.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) UseResetWithBodyWithResponse(ctx context.Context, name string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UseResetResponse, error) {
+	rsp, err := c.UseResetWithBody(ctx, name, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUseResetResponse(rsp)
+}
+
+// UseResetWithResponse performs a POST /v1/accounts/{name}/reset (the `UseReset` operationId) request.
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Spend one of the account's reset credits (Account.resets): Anthropic clears its usage limits at once, as Claude Code offers at a limit. left is the count the caller showed; another count here refuses it (reset_changed), so a second click elsewhere spends no second credit. A retry within 10 minutes of a reset Anthropic gave no sure answer to names the same claim, and Anthropic takes one claim per id, so it spends no second credit. The answer comes once the account's usage was asked again, so it shows the cleared limits when Anthropic allows the ask.
+func (c *ClientWithResponses) UseResetWithResponse(ctx context.Context, name string, body UseResetJSONRequestBody, reqEditors ...RequestEditorFn) (*UseResetResponse, error) {
+	rsp, err := c.UseReset(ctx, name, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUseResetResponse(rsp)
+}
+
 // SetAutoWithBodyWithResponse performs a PUT /v1/auto (the `SetAuto` operationId) request,
 // with any type of body and a specified content type.
 //
@@ -5505,6 +5747,60 @@ func ParseRefreshLoginResponse(rsp *http.Response) (*RefreshLoginResponse, error
 	return response, nil
 }
 
+// ParseUseResetResponse parses an HTTP response from a UseResetWithResponse call
+func ParseUseResetResponse(rsp *http.Response) (*UseResetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UseResetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Account
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON502 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseSetAutoResponse parses an HTTP response from a SetAutoWithResponse call
 func ParseSetAutoResponse(rsp *http.Response) (*SetAutoResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -6294,6 +6590,9 @@ type ServerInterface interface {
 	// (POST /v1/accounts/{name}/refresh)
 	RefreshLogin(c fiber.Ctx, name string) error
 
+	// (POST /v1/accounts/{name}/reset)
+	UseReset(c fiber.Ctx, name string) error
+
 	// (PUT /v1/auto)
 	SetAuto(c fiber.Ctx) error
 
@@ -6634,6 +6933,35 @@ func (siw *ServerInterfaceWrapper) RefreshLogin(c fiber.Ctx) error {
 
 	handler := func(c fiber.Ctx) error {
 		return siw.Handler.RefreshLogin(c, name)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// UseReset operation middleware
+func (siw *ServerInterfaceWrapper) UseReset(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "name" -------------
+	var name string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "name", c.Params("name"), &name, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter name: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.UseReset(c, name)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -7042,6 +7370,8 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Post(options.BaseURL+"/v1/accounts/:name/activate", wrapper.ActivateAccount)
 
 	router.Post(options.BaseURL+"/v1/accounts/:name/refresh", wrapper.RefreshLogin)
+
+	router.Post(options.BaseURL+"/v1/accounts/:name/reset", wrapper.UseReset)
 
 	router.Delete(options.BaseURL+"/v1/accounts/:name/login", wrapper.CancelLogin)
 
@@ -7549,6 +7879,60 @@ func (response RefreshLogin500JSONResponse) VisitRefreshLoginResponse(ctx fiber.
 type RefreshLogin502JSONResponse Error
 
 func (response RefreshLogin502JSONResponse) VisitRefreshLoginResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(502)
+
+	return ctx.JSON(&response)
+}
+
+type UseResetRequestObject struct {
+	Name string `json:"name"`
+	Body *UseResetJSONRequestBody
+}
+
+type UseResetResponseObject interface {
+	VisitUseResetResponse(ctx fiber.Ctx) error
+}
+
+type UseReset200JSONResponse Account
+
+func (response UseReset200JSONResponse) VisitUseResetResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(200)
+
+	return ctx.JSON(&response)
+}
+
+type UseReset404JSONResponse struct{ ErrorJSONResponse }
+
+func (response UseReset404JSONResponse) VisitUseResetResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(404)
+
+	return ctx.JSON(&response)
+}
+
+type UseReset409JSONResponse Error
+
+func (response UseReset409JSONResponse) VisitUseResetResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(409)
+
+	return ctx.JSON(&response)
+}
+
+type UseReset500JSONResponse Error
+
+func (response UseReset500JSONResponse) VisitUseResetResponse(ctx fiber.Ctx) error {
+	ctx.Response().Header.Set("Content-Type", "application/json")
+	ctx.Status(500)
+
+	return ctx.JSON(&response)
+}
+
+type UseReset502JSONResponse Error
+
+func (response UseReset502JSONResponse) VisitUseResetResponse(ctx fiber.Ctx) error {
 	ctx.Response().Header.Set("Content-Type", "application/json")
 	ctx.Status(502)
 
@@ -8306,6 +8690,9 @@ type StrictServerInterface interface {
 	// (POST /v1/accounts/{name}/refresh)
 	RefreshLogin(ctx context.Context, request RefreshLoginRequestObject) (RefreshLoginResponseObject, error)
 
+	// (POST /v1/accounts/{name}/reset)
+	UseReset(ctx context.Context, request UseResetRequestObject) (UseResetResponseObject, error)
+
 	// (PUT /v1/auto)
 	SetAuto(ctx context.Context, request SetAutoRequestObject) (SetAutoResponseObject, error)
 
@@ -8656,6 +9043,39 @@ func (sh *strictHandler) RefreshLogin(ctx fiber.Ctx, name string) error {
 		return err
 	} else if validResponse, ok := response.(RefreshLoginResponseObject); ok {
 		if err := validResponse.VisitRefreshLoginResponse(ctx); err != nil {
+			return err
+		}
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// UseReset operation middleware
+func (sh *strictHandler) UseReset(ctx fiber.Ctx, name string) error {
+	var request UseResetRequestObject
+
+	request.Name = name
+
+	var body UseResetJSONRequestBody
+	if err := ctx.Bind().Body(&body); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+	request.Body = &body
+
+	handler := func(ctx fiber.Ctx, request interface{}) (interface{}, error) {
+		return sh.ssi.UseReset(ctx.Context(), request.(UseResetRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UseReset")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(UseResetResponseObject); ok {
+		if err := validResponse.VisitUseResetResponse(ctx); err != nil {
 			return err
 		}
 	} else if response != nil {
@@ -9194,135 +9614,146 @@ func (sh *strictHandler) OpenWebSession(ctx fiber.Ctx) error {
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"pXrUQMXexLg/taakrr7T01O2aie3v9/+/wEA",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

@@ -52,6 +52,7 @@ func newDaemonCmd() *cobra.Command {
 			}
 			client := anthropic.New()
 			client.UserAgent = update.UserAgent(version)
+			client.ClaudeVersion = claudecode.Versions()
 			sw := switcher.New(switcher.Deps{
 				KC: kc, Store: st, Profiles: client,
 				Service:    claudecode.ServiceName(cfg.Claude.ConfigDir),

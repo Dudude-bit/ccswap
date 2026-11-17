@@ -68,12 +68,31 @@ type fakeAnthropic struct {
 	scope      string
 	onUsage    func(tok string) // runs under mu
 	retryAfter string           // Retry-After of every 429
+	resets     []resp           // answers to reset claims, in turn; missing = 404
+	claims     []string         // "<token> <org> <grant> <request id>" of each reset claim
+	onReset    func(tok string) // runs under mu after a claim, before its answer
 }
 
 func (f *fakeAnthropic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if org, ok := strings.CutSuffix(strings.TrimPrefix(r.URL.Path, "/api/organizations/"), "/reset_rate_limits"); ok {
+		var req map[string]string
+		json.NewDecoder(r.Body).Decode(&req)
+		f.calls = append(f.calls, "reset "+tok)
+		f.claims = append(f.claims, strings.Join([]string{tok, org, req["grant_id"], req["request_id"]}, " "))
+		if f.onReset != nil {
+			f.onReset(tok)
+		}
+		rs := resp{404, ""}
+		if len(f.resets) > 0 && req["program"] == "cedar_ember" {
+			rs, f.resets = f.resets[0], f.resets[1:]
+		}
+		w.WriteHeader(rs.status)
+		io.WriteString(w, rs.body)
+		return
+	}
 	switch r.URL.Path {
 	case "/token":
 		var req struct {

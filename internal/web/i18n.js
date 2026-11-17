@@ -83,14 +83,26 @@ function message(key, args) {
 // fill puts the arguments in for {0} {1} …; a missing one is left out.
 const fill = (s, args) => s.replace(/\{(\d+)\}/g, (_, i) => String(args[i] ?? ''));
 
+// typeset keeps together what a line break would split badly: a one-letter word and the next one, a short
+// last word and the one before it, a number and the word hyphenated to it (5-hour), a middle dot and what
+// follows it, ≈ and its time, Claude Code.
+// Commands in `code` are left as they are: a no-break space would break them when pasted.
+const typeset = (s) => s.split(/(`[^`]*`)/).map((part, i) => (i % 2 ? part : part
+  .replace(/Claude Code/g, 'Claude\u00a0Code')
+  .replace(/(\d)-(?=\p{L})/gu, '$1\u2011')
+  .replace(/(^|[\s(«])(\p{L}) (?=\S)/gu, '$1$2\u00a0')
+  .replace(/ (\p{L}{1,2}[.:!?]?)$/u, '\u00a0$1')
+  .replace(/ · /g, ' ·\u00a0')
+  .replace(/≈ /g, '≈\u00a0'))).join('');
+
 // t is key's text with its arguments, marks left out: for textContent and attributes.
 function t(key, ...args) {
-  return fill(message(key, args).replace(/\*\*|`/g, ''), args);
+  return fill(typeset(message(key, args)).replace(/\*\*|`/g, ''), args);
 }
 
 // tNodes is key's text as nodes: **bold** becomes <b>, `code` <code>. Arguments are text, never markup.
 function tNodes(key, ...args) {
-  return message(key, args).split(/(\*\*[^*]*\*\*|`[^`]*`)/).map((part, i) => {
+  return typeset(message(key, args)).split(/(\*\*[^*]*\*\*|`[^`]*`)/).map((part, i) => {
     if (i % 2 === 0) return fill(part, args);
     const bold = part.startsWith('**');
     const el = document.createElement(bold ? 'b' : 'code');

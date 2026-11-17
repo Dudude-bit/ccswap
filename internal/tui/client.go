@@ -24,6 +24,7 @@ type Client interface {
 	SetStrategy(ctx context.Context, s api.Strategy) error
 	SetWeekly(ctx context.Context, name string, v float64) error // 0: the global weekly threshold
 	RefreshLogin(ctx context.Context, name string) error
+	UseReset(ctx context.Context, name string, left int) error // left: the reset credits the screen showed
 }
 
 var (
@@ -223,6 +224,14 @@ func (a adapter) SetStrategy(ctx context.Context, s api.Strategy) error {
 
 func (a adapter) RefreshLogin(ctx context.Context, name string) error {
 	r, err := a.c.RefreshLoginWithResponse(ctx, name)
+	if err != nil {
+		return down(err)
+	}
+	return fail(r.StatusCode(), r.Body, name, 200)
+}
+
+func (a adapter) UseReset(ctx context.Context, name string, left int) error {
+	r, err := a.c.UseResetWithResponse(ctx, name, api.UseResetRequest{Left: left})
 	if err != nil {
 		return down(err)
 	}

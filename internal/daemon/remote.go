@@ -118,13 +118,30 @@ func (d *Daemon) takeRemote(name string, ra api.Account, maxAge time.Duration) b
 	for _, m := range ra.Models {
 		us.Models = append(us.Models, anthropic.ModelWindow{Name: m.Name, Window: *win(&api.Window{Utilization: m.Utilization, ResetsAt: m.ResetsAt})})
 	}
+	if ra.Resets != nil {
+		for _, g := range ra.Resets.Grants {
+			if g.Left > 0 && g.Id != "" {
+				c := anthropic.ResetCredit{ID: g.Id, Left: g.Left}
+				if g.EndsAt != nil {
+					c.EndsAt = *g.EndsAt
+				}
+				us.Resets = append(us.Resets, c)
+			}
+		}
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	u := d.acct(name)
-	if u.checkedAt.After(at) { // asked here since: keep the newer numbers
+	switch {
+	case u.checkedAt.After(at): // asked here since: keep the newer numbers
 		return true
+	case u.unseen.ID != "" && grantLeft(us.Resets, u.unseen.ID) > u.unseen.Left:
+		// A grant's resets only fall, so more of the one spent here than it left means numbers from before
+		// the reset, whatever the other computer's clock says: ask Anthropic here until it has caught up.
+		return false
 	}
-	u.fiveHour, u.noFiveHour, u.sevenDay, u.models, u.checkedAt, u.err = us.FiveHour, us.NoFiveHour, us.SevenDay, us.Models, at, ""
+	u.unseen = anthropic.ResetCredit{}
+	u.fiveHour, u.noFiveHour, u.sevenDay, u.models, u.resets, u.checkedAt, u.err = us.FiveHour, us.NoFiveHour, us.SevenDay, us.Models, us.Resets, at, ""
 	if ra.Error != nil {
 		u.err = *ra.Error
 	}
