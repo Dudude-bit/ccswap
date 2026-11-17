@@ -15,8 +15,10 @@ import (
 	"github.com/Dudude-bit/ccswap/internal/switcher"
 )
 
-func grant(id string, left int) string {
-	return fmt.Sprintf(`{"id":%q,"resets_left":%d,"ends_at":%q,"usable_now":true}`, id, left, t0.Add(30*24*time.Hour).Format(time.RFC3339))
+func grant(id string, left int) string { return grantEnds(id, left, t0.Add(30*24*time.Hour)) }
+
+func grantEnds(id string, left int, end time.Time) string {
+	return fmt.Sprintf(`{"id":%q,"resets_left":%d,"ends_at":%q,"usable_now":true}`, id, left, end.Format(time.RFC3339))
 }
 
 // usageResets is usage at week % of the weekly window with reset credits: next, then grants.
@@ -231,6 +233,25 @@ func TestRemoteNumbersFromBeforeAResetAreNotTaken(t *testing.T) {
 	}
 	if !remote(2, "launch2") || e.view("b").Resets.Left != 2 {
 		t.Fatal("past that, a new grant is taken from it as any number")
+	}
+}
+
+func TestRemoteCapCountsLiveGrantsOnly(t *testing.T) {
+	e := withResets(t)
+	e.api.set(func(f *fakeAnthropic) {
+		f.usage["atB"] = usageResets(100, "launch", grant("launch", 2), grantEnds("old", 2, e.clk.Now().Add(time.Minute)))
+		f.resets = []resp{{200, `{"result":"reset"}`}}
+		f.onReset = func(string) { f.usage["atB"] = resp{500, ""} } // the ask after the reset fails
+	})
+	e.d.fetch(context.Background(), "b", "atB")
+	e.clk.Add(2 * time.Minute) // old runs out, still in the numbers asked before
+	if _, err := e.d.UseReset(context.Background(), "b", 2); err != nil {
+		t.Fatal(err)
+	}
+	at := e.clk.Now()
+	ra := api.Account{CheckedAt: &at, SevenDay: &api.Window{Utilization: 100}, Resets: &api.Resets{Left: 2, Credit: "launch"}}
+	if e.d.takeRemote("b", ra, time.Hour) {
+		t.Fatal("a grant that ran out does not raise the cap: numbers from before the reset are not taken")
 	}
 }
 
