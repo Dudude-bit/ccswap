@@ -59,7 +59,7 @@ func (e *tenv) claims() []string {
 func TestResetSpendsOneCreditAndAsksAgain(t *testing.T) {
 	e := withResets(t)
 	v := e.view("b")
-	if r := v.Resets; r == nil || r.Left != 2 || r.Credit != "launch" || r.EndsAt == nil || !r.EndsAt.Equal(t0.Add(30*24*time.Hour)) || !v.Exhausted {
+	if r := v.Resets; r == nil || r.Left != 2 || len(r.Grants) != 2 || r.Grants[0].Id != "launch" || r.EndsAt == nil || !r.EndsAt.Equal(t0.Add(30*24*time.Hour)) || !v.Exhausted {
 		t.Fatalf("%+v exhausted=%v", v.Resets, v.Exhausted)
 	}
 	if _, err := e.d.UseReset(context.Background(), "b", 1); !errors.Is(err, ErrResetChanged) || len(e.claims()) != 0 {
@@ -73,7 +73,7 @@ func TestResetSpendsOneCreditAndAsksAgain(t *testing.T) {
 	e.d.acct("b").limitHitUntil = e.clk.Now().Add(time.Hour)
 	e.d.mu.Unlock()
 	a, err := e.d.UseReset(context.Background(), "b", 2)
-	if err != nil || a.Resets == nil || a.Resets.Left != 1 || a.Resets.Credit != "tenure" || a.SevenDay == nil || a.SevenDay.Utilization != 0 || a.Exhausted {
+	if err != nil || a.Resets == nil || a.Resets.Left != 1 || a.Resets.Grants[0].Id != "tenure" || a.SevenDay == nil || a.SevenDay.Utilization != 0 || a.Exhausted {
 		t.Fatalf("the answer shows the cleared limits: %+v %v", a, err)
 	}
 	if c := e.claims(); len(c) != 1 || !claimRe.MatchString(c[0]) || !strings.HasPrefix(c[0], "atB org-b launch ") {
@@ -195,7 +195,7 @@ func TestUsageAskedBeforeAResetDoesNotUndoIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.api.set(func(f *fakeAnthropic) { f.onUsage = nil })
-	if r := e.view("b").Resets; r == nil || r.Left != 1 || r.Credit != "tenure" {
+	if r := e.view("b").Resets; r == nil || r.Left != 1 || r.Grants[0].Id != "tenure" {
 		t.Fatal("an answer asked before the reset keeps the spend:", r)
 	}
 	e.clk.Add(2 * time.Second)
@@ -218,7 +218,7 @@ func TestRemoteNumbersFromBeforeAResetAreNotTaken(t *testing.T) {
 	}
 	remote := func(left int, credit string) bool {
 		at := e.clk.Now().Add(time.Hour) // the other computer's clock runs ahead: its numbers look newest
-		ra := api.Account{CheckedAt: &at, SevenDay: &api.Window{Utilization: 100}, Resets: &api.Resets{Left: left, Credit: credit}}
+		ra := api.Account{CheckedAt: &at, SevenDay: &api.Window{Utilization: 100}, Resets: &api.Resets{Left: left, Grants: []api.ResetGrant{{Id: credit, Left: left}}}}
 		return e.d.takeRemote("b", ra, 2*time.Hour)
 	}
 	e.clk.Add(time.Minute) // the other ccswap has not asked since, and its clock labels its numbers now
@@ -236,36 +236,68 @@ func TestRemoteNumbersFromBeforeAResetAreNotTaken(t *testing.T) {
 	}
 }
 
-func TestRemoteCapCountsLiveGrantsOnly(t *testing.T) {
-	for _, after := range []bool{false, true} { // old runs out before the reset, or after it
+func TestRemoteNumbersBeforeAResetWhateverOtherGrants(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		before, wait time.Duration // when old runs out, from the reset; how long after it the other ccswap answers
+	}{
+		{"old ran out before the reset", -time.Minute, 0},
+		{"old runs out after it", time.Minute, 2 * time.Minute},
+		{"the other clock runs ahead past old's end", time.Minute, 0}, // it no longer names old, live here
+	} {
 		e := withResets(t)
+		ends := e.clk.Now().Add(time.Minute + tc.before)
 		e.api.set(func(f *fakeAnthropic) {
-			f.usage["atB"] = usageResets(100, "launch", grant("launch", 2), grantEnds("old", 2, e.clk.Now().Add(time.Minute)))
+			f.usage["atB"] = usageResets(100, "launch", grant("launch", 2), grantEnds("old", 2, ends))
 			f.resets = []resp{{200, `{"result":"reset"}`}}
 			f.onReset = func(string) { f.usage["atB"] = resp{500, ""} } // the ask after the reset fails
 		})
 		e.d.fetch(context.Background(), "b", "atB")
-		left := 2
-		if after {
-			left = 4
-		} else {
-			e.clk.Add(2 * time.Minute)
+		e.clk.Add(time.Minute)
+		if _, err := e.d.UseReset(context.Background(), "b", e.view("b").Resets.Left); err != nil {
+			t.Fatal(tc.name, err)
 		}
-		if _, err := e.d.UseReset(context.Background(), "b", left); err != nil {
-			t.Fatal(after, err)
-		}
-		e.clk.Add(2 * time.Minute)
+		e.clk.Add(tc.wait + time.Second)
 		remote := func(left int) bool {
 			at := e.clk.Now()
-			ra := api.Account{CheckedAt: &at, SevenDay: &api.Window{Utilization: 100}, Resets: &api.Resets{Left: left, Credit: "launch"}}
+			ra := api.Account{CheckedAt: &at, SevenDay: &api.Window{Utilization: 100}, Resets: &api.Resets{Left: left, Grants: []api.ResetGrant{{Id: "launch", Left: left}}}}
 			return e.d.takeRemote("b", ra, time.Hour)
 		}
 		if remote(2) {
-			t.Fatal(after, "a grant that ran out does not raise the cap: numbers from before the reset are not taken")
+			t.Fatal(tc.name, ": numbers from before the reset are not taken")
 		}
 		if !remote(1) {
-			t.Fatal(after, "numbers that show the reset are taken")
+			t.Fatal(tc.name, ": numbers that show the reset are taken")
 		}
+	}
+}
+
+func TestRemoteGrantsKeepTheirOwnEnds(t *testing.T) {
+	e := withResets(t)
+	remote := func(gs ...api.ResetGrant) bool {
+		e.clk.Add(time.Second) // each newer than the last
+		at := e.clk.Now()
+		ra := api.Account{CheckedAt: &at, SevenDay: &api.Window{Utilization: 100}, Resets: &api.Resets{Grants: gs}}
+		return e.d.takeRemote("b", ra, time.Hour)
+	}
+	soon := e.clk.Now().Add(time.Minute)
+	launch, tenure := api.ResetGrant{Id: "launch", Left: 1, EndsAt: &soon}, api.ResetGrant{Id: "tenure", Left: 1}
+	if !remote(launch, tenure) {
+		t.Fatal("fresh numbers are taken")
+	}
+	e.api.set(func(f *fakeAnthropic) {
+		f.resets = []resp{{200, `{"result":"reset"}`}} // no resets_left
+		f.onReset = func(string) { f.usage["atB"] = resp{500, ""} }
+	})
+	if _, err := e.d.UseReset(context.Background(), "b", 2); err != nil {
+		t.Fatal(err)
+	}
+	if remote(launch, tenure) {
+		t.Fatal("numbers from before the reset are not taken")
+	}
+	e.clk.Add(2 * time.Minute) // launch runs out; tenure, which ends later, is left
+	if !remote(tenure) || e.view("b").Resets == nil || e.view("b").Resets.Left != 1 {
+		t.Fatal("numbers that show the reset are taken, with the grant left:", e.view("b").Resets)
 	}
 }
 
@@ -334,11 +366,11 @@ func TestResetNeedsACreditAndALogin(t *testing.T) {
 func TestRemoteResetsCarryOver(t *testing.T) {
 	e := newTenv(t)
 	at, ends := e.clk.Now(), t0.Add(24*time.Hour)
-	ra := api.Account{CheckedAt: &at, SevenDay: &api.Window{Utilization: 50}, Resets: &api.Resets{Left: 2, Credit: "launch", EndsAt: &ends}}
+	ra := api.Account{CheckedAt: &at, SevenDay: &api.Window{Utilization: 50}, Resets: &api.Resets{Left: 2, EndsAt: &ends, Grants: []api.ResetGrant{{Id: "launch", Left: 2, EndsAt: &ends}}}}
 	if !e.d.takeRemote("b", ra, time.Hour) {
 		t.Fatal("fresh numbers are taken")
 	}
-	if r := e.view("b").Resets; r == nil || r.Left != 2 || r.Credit != "launch" || !r.EndsAt.Equal(ends) {
+	if r := e.view("b").Resets; r == nil || r.Left != 2 || r.Grants[0].Id != "launch" || !r.EndsAt.Equal(ends) {
 		t.Fatal(r)
 	}
 	_, body, err := e.d.UsageRaw(context.Background(), "b", time.Hour)

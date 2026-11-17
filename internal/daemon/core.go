@@ -101,7 +101,7 @@ type acctUsage struct {
 	resets             []anthropic.ResetCredit // reset credits as of checkedAt, the one spent next first
 	claim              resetClaim              // a reset claim with no sure answer yet, which a retry names again
 	spentAt            time.Time               // when a reset was last confirmed: usage asked before it would undo it
-	remoteBehind       bool                    // a reset here a remote ccswap has not shown yet
+	unseen             anthropic.ResetCredit   // a grant's count after a reset here a remote ccswap has not shown yet; no ID: none
 	checkedAt          time.Time
 	err                string
 	refreshErr         string // err as a failed refresh set it, which the next refresh that works clears
@@ -1519,7 +1519,10 @@ func (d *Daemon) view(st store.State, a store.Account) api.Account {
 		v.Models = append(v.Models, api.ModelWindow{Name: m.Name, Utilization: m.Utilization, ResetsAt: timePtr(m.ResetsAt)})
 	}
 	if c := liveCredits(u.resets, now); len(c) > 0 && !a.NeedsLogin {
-		v.Resets = &api.Resets{Left: creditsLeft(c), Credit: c[0].ID, EndsAt: timePtr(c[0].EndsAt)}
+		v.Resets = &api.Resets{Left: creditsLeft(c), EndsAt: timePtr(c[0].EndsAt)}
+		for _, g := range c {
+			v.Resets.Grants = append(v.Resets.Grants, api.ResetGrant{Id: g.ID, Left: g.Left, EndsAt: timePtr(g.EndsAt)})
+		}
 	}
 	return v
 }

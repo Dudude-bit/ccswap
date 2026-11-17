@@ -572,11 +572,21 @@ components:
         The account's reset credits, which /v1/accounts/{name}/reset spends: grants of limit resets Anthropic gave it,
         such as one at a model launch. Absent when it has none usable now, while it needs a login, and before
         Anthropic said; Anthropic says only to a recent Claude Code, whose version the daemon sends.
-      required: [left, credit]
+      required: [left, grants]
       properties:
         left: {type: integer, description: Resets the account can spend now, at least 1}
-        credit: {type: string, description: "Anthropic's id of the grant a reset spends next; ccswap remote takes it from here"}
-        ends_at: {type: string, format: date-time, description: When that grant runs out; absent when it does not}
+        ends_at: {type: string, format: date-time, description: When the grant a reset spends next runs out; absent when it does not}
+        grants:
+          type: array
+          description: The grants left, the one a reset spends next first; ccswap remote takes them from here
+          items: {$ref: '#/components/schemas/ResetGrant'}
+    ResetGrant:
+      type: object
+      required: [id, left]
+      properties:
+        id: {type: string, description: Anthropic's id of the grant}
+        left: {type: integer, description: Resets left of it}
+        ends_at: {type: string, format: date-time, description: When it runs out; absent when it does not}
     UseResetRequest:
       type: object
       required: [left]

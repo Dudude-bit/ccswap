@@ -60,6 +60,16 @@ func creditsLeft(credits []anthropic.ResetCredit) int {
 	return n
 }
 
+// grantLeft is the resets left of the grant id: none when credits do not name it.
+func grantLeft(credits []anthropic.ResetCredit, id string) int {
+	for _, c := range credits {
+		if c.ID == id {
+			return c.Left
+		}
+	}
+	return 0
+}
+
 // withLeft is credits with n resets left of the grant id, in a new slice: views read the old one unlocked.
 func withLeft(credits []anthropic.ResetCredit, id string, n int) []anthropic.ResetCredit {
 	var out []anthropic.ResetCredit
@@ -199,7 +209,7 @@ func (d *Daemon) UseReset(ctx context.Context, name string, left int) (api.Accou
 	u = d.acct(name)
 	u.resets = withLeft(u.resets, credit.ID, n)
 	u.spentAt = answered // an ask in flight from before the reset must not undo it
-	u.remoteBehind = true
+	u.unseen = anthropic.ResetCredit{ID: credit.ID, Left: n}
 	u.limitHitUntil = time.Time{} // the limit it hit is cleared
 	d.mu.Unlock()
 	d.reask(ctx, name)

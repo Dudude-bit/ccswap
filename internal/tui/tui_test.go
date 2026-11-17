@@ -738,9 +738,9 @@ func TestLoginKeyLogsTheSelectedAccountInAgain(t *testing.T) {
 func TestResetCreditsShowAndSpend(t *testing.T) {
 	f := fixture()
 	ends := time.Now().Add(40 * 24 * time.Hour)
-	f.accts[1].Resets = &api.Resets{Left: 2, Credit: "launch", EndsAt: &ends} // home, at its limit
+	f.accts[1].Resets = &api.Resets{Left: 2, EndsAt: &ends, Grants: []api.ResetGrant{{Id: "launch", Left: 2, EndsAt: &ends}}} // home, at its limit
 	f.accts[1].FiveHour.Utilization = 100
-	f.accts[0].Resets = &api.Resets{Left: 1, Credit: "launch"} // work, which is not
+	f.accts[0].Resets = &api.Resets{Left: 1, Grants: []api.ResetGrant{{Id: "launch", Left: 1}}} // work, which is not
 	m := loadedAt(t, f, 100)
 	v := text(m)
 	if !strings.Contains(v, "home ↺2") || !strings.Contains(v, "work ↺1") || !strings.Contains(v, "↺ "+i18n.T("tui.reset_credits_legend")) {
@@ -784,7 +784,7 @@ func TestResetCreditsShowAndSpend(t *testing.T) {
 
 func TestShortTerminalKeepsThePromptAndKeys(t *testing.T) {
 	f := fixture()
-	f.accts[1].Resets = &api.Resets{Left: 2, Credit: "launch"}
+	f.accts[1].Resets = &api.Resets{Left: 2, Grants: []api.ResetGrant{{Id: "launch", Left: 2}}}
 	m := loadedAt(t, f, 56)
 	m, _ = send(m, tea.WindowSizeMsg{Width: 56, Height: 16}) // a phone with its keyboard up
 	m, _ = send(m, key("down"))
