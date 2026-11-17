@@ -199,8 +199,7 @@ func (d *Daemon) UseReset(ctx context.Context, name string, left int) (api.Accou
 	u = d.acct(name)
 	u.resets = withLeft(u.resets, credit.ID, n)
 	u.spentAt = answered // an ask in flight from before the reset must not undo it
-	total := creditsLeft(liveCredits(u.resets, answered))
-	u.remoteCap = &total
+	u.remoteBehind = true
 	u.limitHitUntil = time.Time{} // the limit it hit is cleared
 	d.mu.Unlock()
 	d.reask(ctx, name)

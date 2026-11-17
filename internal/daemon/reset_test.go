@@ -237,21 +237,35 @@ func TestRemoteNumbersFromBeforeAResetAreNotTaken(t *testing.T) {
 }
 
 func TestRemoteCapCountsLiveGrantsOnly(t *testing.T) {
-	e := withResets(t)
-	e.api.set(func(f *fakeAnthropic) {
-		f.usage["atB"] = usageResets(100, "launch", grant("launch", 2), grantEnds("old", 2, e.clk.Now().Add(time.Minute)))
-		f.resets = []resp{{200, `{"result":"reset"}`}}
-		f.onReset = func(string) { f.usage["atB"] = resp{500, ""} } // the ask after the reset fails
-	})
-	e.d.fetch(context.Background(), "b", "atB")
-	e.clk.Add(2 * time.Minute) // old runs out, still in the numbers asked before
-	if _, err := e.d.UseReset(context.Background(), "b", 2); err != nil {
-		t.Fatal(err)
-	}
-	at := e.clk.Now()
-	ra := api.Account{CheckedAt: &at, SevenDay: &api.Window{Utilization: 100}, Resets: &api.Resets{Left: 2, Credit: "launch"}}
-	if e.d.takeRemote("b", ra, time.Hour) {
-		t.Fatal("a grant that ran out does not raise the cap: numbers from before the reset are not taken")
+	for _, after := range []bool{false, true} { // old runs out before the reset, or after it
+		e := withResets(t)
+		e.api.set(func(f *fakeAnthropic) {
+			f.usage["atB"] = usageResets(100, "launch", grant("launch", 2), grantEnds("old", 2, e.clk.Now().Add(time.Minute)))
+			f.resets = []resp{{200, `{"result":"reset"}`}}
+			f.onReset = func(string) { f.usage["atB"] = resp{500, ""} } // the ask after the reset fails
+		})
+		e.d.fetch(context.Background(), "b", "atB")
+		left := 2
+		if after {
+			left = 4
+		} else {
+			e.clk.Add(2 * time.Minute)
+		}
+		if _, err := e.d.UseReset(context.Background(), "b", left); err != nil {
+			t.Fatal(after, err)
+		}
+		e.clk.Add(2 * time.Minute)
+		remote := func(left int) bool {
+			at := e.clk.Now()
+			ra := api.Account{CheckedAt: &at, SevenDay: &api.Window{Utilization: 100}, Resets: &api.Resets{Left: left, Credit: "launch"}}
+			return e.d.takeRemote("b", ra, time.Hour)
+		}
+		if remote(2) {
+			t.Fatal(after, "a grant that ran out does not raise the cap: numbers from before the reset are not taken")
+		}
+		if !remote(1) {
+			t.Fatal(after, "numbers that show the reset are taken")
+		}
 	}
 }
 

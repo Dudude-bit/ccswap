@@ -189,8 +189,8 @@ time. `reset`, and `already_used` to a retry, count as done: the daemon sets its
 `resets_left`, or takes one off it (a retry's `already_used` only when the count does not show the first
 claim's spend yet), ends a limit hit's hour, and asks the account's usage again before it answers. Usage
 asked before the reset was confirmed is dropped so it cannot undo the spend. A grant's resets only fall, so
-a remote ccswap's numbers with more resets than the reset left are from before it, whatever the other
-computer's clock says: the daemon does not take them and asks Anthropic itself until the other ccswap shows
+a remote ccswap's numbers with more live resets than the daemon counts now are from before it, whatever
+the other computer's clock says: the daemon does not take them and asks Anthropic itself until the other ccswap shows
 the reset. `already_used` to a new claim means another claim, such as Claude Code's at its limit, spent the
 credit first: nothing was spent now (`reset_changed`). A `cooldown` says until when from `cooldown_until`.
 
