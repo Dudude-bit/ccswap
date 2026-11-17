@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Dudude-bit/ccswap/internal/anthropic"
 	"github.com/Dudude-bit/ccswap/internal/api"
 	"github.com/Dudude-bit/ccswap/internal/store"
 	"github.com/Dudude-bit/ccswap/internal/switcher"
@@ -197,26 +196,41 @@ func TestUsageAskedBeforeAResetDoesNotUndoIt(t *testing.T) {
 	if r := e.view("b").Resets; r == nil || r.Left != 1 || r.Credit != "tenure" {
 		t.Fatal("an answer asked before the reset keeps the spend:", r)
 	}
-	spent := e.clk.Now().Add(time.Second)
-	remote := func(at time.Time) bool {
-		return e.d.takeRemote("b", api.Account{CheckedAt: &at, Resets: &api.Resets{Left: 2, Credit: "launch"}}, time.Hour)
-	}
-	e.clk.Add(time.Second + anthropic.Timeout + time.Second)
-	if remote(spent.Add(anthropic.Timeout - time.Second)) {
-		t.Fatal("another ccswap's numbers whose ask may have left before the reset are not taken: this one asks Anthropic")
-	}
-	if r := e.view("b").Resets; r == nil || r.Left != 1 {
-		t.Fatal("another ccswap's numbers from before the reset keep the spend:", r)
-	}
-	if !remote(e.clk.Now()) || e.view("b").Resets.Left != 2 {
-		t.Fatal("another ccswap's numbers asked after the reset are taken")
-	}
 	e.clk.Add(2 * time.Second)
 	if _, err := e.d.fetch(context.Background(), "b", "atB"); err != nil {
 		t.Fatal(err)
 	}
 	if r := e.view("b").Resets; r == nil || r.Left != 2 {
 		t.Fatal("an ask after the reset says what Anthropic has:", r)
+	}
+}
+
+func TestRemoteNumbersFromBeforeAResetAreNotTaken(t *testing.T) {
+	e := withResets(t)
+	e.api.set(func(f *fakeAnthropic) {
+		f.resets = []resp{{200, `{"result":"reset"}`}}
+		f.onReset = func(string) { f.usage["atB"] = usageResets(0, "tenure", grant("tenure", 1)) }
+	})
+	if _, err := e.d.UseReset(context.Background(), "b", 2); err != nil {
+		t.Fatal(err)
+	}
+	remote := func(left int, credit string) bool {
+		at := e.clk.Now().Add(time.Hour) // the other computer's clock runs ahead: its numbers look newest
+		ra := api.Account{CheckedAt: &at, SevenDay: &api.Window{Utilization: 100}, Resets: &api.Resets{Left: left, Credit: credit}}
+		return e.d.takeRemote("b", ra, 2*time.Hour)
+	}
+	e.clk.Add(time.Minute) // the other ccswap has not asked since, and its clock labels its numbers now
+	if remote(2, "launch") {
+		t.Fatal("numbers with more resets than the reset here left predate it, whatever their clock: this one asks Anthropic")
+	}
+	if v := e.view("b"); v.Resets == nil || v.Resets.Left != 1 || v.SevenDay.Utilization != 0 {
+		t.Fatal("numbers from before the reset keep neither its credit nor its limits:", v.Resets, v.SevenDay)
+	}
+	if !remote(1, "tenure") || e.view("b").SevenDay.Utilization != 100 {
+		t.Fatal("once the other ccswap shows the reset, its numbers are taken")
+	}
+	if !remote(2, "launch2") || e.view("b").Resets.Left != 2 {
+		t.Fatal("past that, a new grant is taken from it as any number")
 	}
 }
 

@@ -131,9 +131,12 @@ func (d *Daemon) takeRemote(name string, ra api.Account, maxAge time.Duration) b
 	switch {
 	case u.checkedAt.After(at): // asked here since: keep the newer numbers
 		return true
-	case at.Before(u.spentAt.Add(anthropic.Timeout)): // its ask may have left before a reset here: ask Anthropic here
+	case u.remoteCap != nil && creditsLeft(us.Resets) > *u.remoteCap:
+		// A grant's resets only fall, so more than a reset here left means numbers from before it, whatever
+		// the other computer's clock says: ask Anthropic here until the other ccswap has caught up.
 		return false
 	}
+	u.remoteCap = nil
 	u.fiveHour, u.noFiveHour, u.sevenDay, u.models, u.resets, u.checkedAt, u.err = us.FiveHour, us.NoFiveHour, us.SevenDay, us.Models, us.Resets, at, ""
 	if ra.Error != nil {
 		u.err = *ra.Error

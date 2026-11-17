@@ -101,6 +101,7 @@ type acctUsage struct {
 	resets             []anthropic.ResetCredit // reset credits as of checkedAt, the one spent next first
 	claim              resetClaim              // a reset claim with no sure answer yet, which a retry names again
 	spentAt            time.Time               // when a reset was last confirmed: usage asked before it would undo it
+	remoteCap          *int                    // after a reset here, the resets left: a remote ccswap's numbers with more predate it
 	checkedAt          time.Time
 	err                string
 	refreshErr         string // err as a failed refresh set it, which the next refresh that works clears
@@ -1075,6 +1076,10 @@ func (d *Daemon) fetch(ctx context.Context, name, tok string) (anthropic.UsageRe
 	case stale: // asked before a reset landed: the ask after the reset has its numbers
 	default:
 		u.fiveHour, u.noFiveHour, u.sevenDay, u.models, u.resets = res.Usage.FiveHour, res.Usage.NoFiveHour, res.Usage.SevenDay, res.Usage.Models, res.Usage.Resets
+		if u.remoteCap != nil { // Anthropic's own count, asked after the reset
+			n := creditsLeft(u.resets)
+			u.remoteCap = &n
+		}
 		u.checkedAt, u.err = now, ""
 		u.sample()
 		if u.calm++; u.calm >= calmAnswers && u.every > 0 { // probe whether the endpoint eased up
