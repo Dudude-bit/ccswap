@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Dudude-bit/ccswap/internal/anthropic"
 	"github.com/Dudude-bit/ccswap/internal/api"
 	"github.com/Dudude-bit/ccswap/internal/store"
 	"github.com/Dudude-bit/ccswap/internal/switcher"
@@ -196,12 +197,19 @@ func TestUsageAskedBeforeAResetDoesNotUndoIt(t *testing.T) {
 	if r := e.view("b").Resets; r == nil || r.Left != 1 || r.Credit != "tenure" {
 		t.Fatal("an answer asked before the reset keeps the spend:", r)
 	}
-	at := e.clk.Now()
-	if !e.d.takeRemote("b", api.Account{CheckedAt: &at, Resets: &api.Resets{Left: 2, Credit: "launch"}}, time.Hour) {
-		t.Fatal("numbers from before the reset count as kept")
+	spent := e.clk.Now().Add(time.Second)
+	remote := func(at time.Time) bool {
+		return e.d.takeRemote("b", api.Account{CheckedAt: &at, Resets: &api.Resets{Left: 2, Credit: "launch"}}, time.Hour)
+	}
+	e.clk.Add(time.Second + anthropic.Timeout + time.Second)
+	if remote(spent.Add(anthropic.Timeout - time.Second)) {
+		t.Fatal("another ccswap's numbers whose ask may have left before the reset are not taken: this one asks Anthropic")
 	}
 	if r := e.view("b").Resets; r == nil || r.Left != 1 {
 		t.Fatal("another ccswap's numbers from before the reset keep the spend:", r)
+	}
+	if !remote(e.clk.Now()) || e.view("b").Resets.Left != 2 {
+		t.Fatal("another ccswap's numbers asked after the reset are taken")
 	}
 	e.clk.Add(2 * time.Second)
 	if _, err := e.d.fetch(context.Background(), "b", "atB"); err != nil {

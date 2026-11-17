@@ -188,7 +188,9 @@ gets a new id. The daemon refuses a count other than its own (`reset_changed`), 
 time. `reset`, and `already_used` to a retry, count as done: the daemon sets its count from Anthropic's
 `resets_left`, or takes one off it (a retry's `already_used` only when the count does not show the first
 claim's spend yet), ends a limit hit's hour, and asks the account's usage again before it answers. Usage
-asked before the reset was confirmed, here or by a remote ccswap, is dropped so it cannot undo the spend. `already_used` to a new claim means another claim, such as Claude Code's at its limit, spent the
+asked before the reset was confirmed is dropped so it cannot undo the spend; so are a remote ccswap's
+numbers checked less than 15 seconds after it, as their ask may have left before it, and the daemon asks
+Anthropic itself instead. `already_used` to a new claim means another claim, such as Claude Code's at its limit, spent the
 credit first: nothing was spent now (`reset_changed`). A `cooldown` says until when from `cooldown_until`.
 
 - **Which token:** for the account Claude Code holds, the access token in Claude Code's item, read only;

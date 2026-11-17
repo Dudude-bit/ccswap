@@ -128,8 +128,11 @@ func (d *Daemon) takeRemote(name string, ra api.Account, maxAge time.Duration) b
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	u := d.acct(name)
-	if u.checkedAt.After(at) || at.Before(u.spentAt) { // asked here since, or from before a reset: keep the newer numbers
+	switch {
+	case u.checkedAt.After(at): // asked here since: keep the newer numbers
 		return true
+	case at.Before(u.spentAt.Add(anthropic.Timeout)): // its ask may have left before a reset here: ask Anthropic here
+		return false
 	}
 	u.fiveHour, u.noFiveHour, u.sevenDay, u.models, u.resets, u.checkedAt, u.err = us.FiveHour, us.NoFiveHour, us.SevenDay, us.Models, us.Resets, at, ""
 	if ra.Error != nil {
