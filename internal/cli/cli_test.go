@@ -1041,7 +1041,7 @@ func TestHintsForEveryCode(t *testing.T) {
 		bad  string
 	}{
 		{switcher.ErrCannotIdentify, []string{"use", "b"}, "ccswap use b --force", ""},
-		{switcher.ErrEntryExpired, []string{"use", "b"}, i18n.T("tui.claude_idle"), "--force"},
+		{switcher.ErrEntryExpired, []string{"use", "b"}, "ccswap use b --force", ""}, // a blocked login never renews
 		{switcher.ErrCannotIdentify, []string{"adopt", "b"}, i18n.T("tui.reason", switcher.ErrCannotIdentify), "--force"},
 		{store.ErrDuplicate, []string{"adopt", "b"}, i18n.T("tui.account_exists"), ""},
 		{daemon.ErrRemoveActive, []string{"remove", "b", "--yes"}, i18n.T("tui.remove_active"), ""},

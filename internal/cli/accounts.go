@@ -225,8 +225,12 @@ func newUseCmd() *cobra.Command {
 				return down(err)
 			}
 			if err := apiErr(r.StatusCode(), r.Body, args[0], 200); err != nil {
-				if c := parseErr(r.Body).Code; !force && (c == "near_refresh" || c == "cannot_identify") {
+				switch c := parseErr(r.Body).Code; {
+				case force:
+				case c == "near_refresh" || c == "cannot_identify":
 					return fmt.Errorf(i18n.T("use.force_hint"), err, args[0])
+				case c == "entry_expired": // Claude Code cannot renew a blocked or logged-out login: only --force leaves it
+					return fmt.Errorf(i18n.T("use.idle_force_hint"), err, args[0])
 				}
 				return err
 			}

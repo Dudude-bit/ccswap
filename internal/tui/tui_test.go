@@ -429,6 +429,23 @@ func TestNearRefreshConfirmThenForce(t *testing.T) {
 	}
 }
 
+func TestExpiredLoginConfirmThenForce(t *testing.T) {
+	f := fixture()
+	f.actErr = []error{fail(409, []byte(`{"code":"entry_expired"}`), "home", 200)} // a blocked login Claude Code never renews
+	m := loaded(t, f)
+	m, _ = send(m, key("down"))
+	m, cmd := send(m, key("enter"))
+	m = run(t, m, cmd)
+	if v := text(m); !strings.Contains(v, strings.Join(strings.Fields(i18n.T("tui.claude_idle_confirm"))[:4], " ")) || !strings.Contains(v, "y "+i18n.T("tui.yes")) {
+		t.Fatalf("no way to leave the login:\n%s", v)
+	}
+	m, cmd = send(m, key("y"))
+	run(t, m, cmd)
+	if want := []call{{"home", false}, {"home", true}}; len(f.acts) != 2 || f.acts[0] != want[0] || f.acts[1] != want[1] {
+		t.Fatalf("acts = %v", f.acts)
+	}
+}
+
 func TestNearRefreshDeclined(t *testing.T) {
 	f := fixture()
 	f.actErr = []error{ErrNearRefresh}

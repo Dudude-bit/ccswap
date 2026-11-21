@@ -1059,7 +1059,7 @@ func (m *Model) tail(w int, now time.Time, gap bool) []string {
 	var out []string
 	switch {
 	case m.mode == modeConfirm:
-		out = append(out, m.said(w, seg{"!", p.warnB}, seg{i18n.T("tui.token_refreshing_confirm"), p.warn})...)
+		out = append(out, m.said(w, seg{"!", p.warnB}, seg{m.ask, p.warn})...)
 		return append(out, m.keys(w, [2]string{"y", i18n.T("tui.yes")}, [2]string{"n", i18n.T("tui.no")})...)
 	case m.mode == modeReset:
 		out = append(out, m.said(w, seg{"↺", p.accB}, seg{m.resetAsk(now), p.plain})...)

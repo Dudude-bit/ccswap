@@ -32,6 +32,9 @@ var (
 	ErrDown error = i18n.Err("tui.daemon_down")
 	// ErrNearRefresh means the active token is about to refresh; Activate may be retried with force.
 	ErrNearRefresh error = i18n.Err("tui.token_refreshing")
+	// ErrClaudeIdle means Claude Code's token has expired, which a blocked or logged-out login never renews;
+	// Activate may be retried with force.
+	ErrClaudeIdle error = i18n.Err("tui.claude_idle")
 	// ErrSlow means the call timed out; a mutating one may still be running in the daemon.
 	ErrSlow    error = i18n.Err("tui.daemon_slow")
 	errBadResp error = i18n.Err("tui.bad_reply")
@@ -43,7 +46,7 @@ func NameRule() string {
 }
 
 // Hint explains a daemon error code in the current language, or "" when the code has none. Hints never
-// offer --force: only `ccswap use` has it, and it adds that itself.
+// offer --force: `ccswap use` adds it itself, and the TUI asks before it forces.
 func Hint(code, name string) string {
 	who := name
 	if who == "" {
@@ -130,8 +133,11 @@ func fail(code int, body []byte, name string, ok int) error {
 	}
 	var e api.Error
 	_ = json.Unmarshal(body, &e)
-	if e.Code == "near_refresh" {
+	switch e.Code {
+	case "near_refresh":
 		return ErrNearRefresh
+	case "entry_expired":
+		return ErrClaudeIdle
 	}
 	if h := Describe(e, name); h != "" {
 		return errors.New(h)
