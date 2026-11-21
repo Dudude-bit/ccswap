@@ -72,7 +72,8 @@ type Model struct {
 
 	sel     string // selected account name; survives refreshes
 	mode    mode
-	pending string // account awaiting the near_refresh or reset confirmation, or its weekly threshold
+	pending string // account awaiting the forced switch or reset confirmation, or its weekly threshold
+	ask     string // the question of a forced switch
 	left    int    // the reset credits shown when the reset was asked
 	input   textinput.Model
 	hint    string // validation hint under the name prompt
@@ -221,7 +222,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.err == nil:
 			return m, tea.Batch(m.say(msg.done), m.poll())
 		case msg.offerOK && errors.Is(msg.err, ErrNearRefresh):
-			m.mode, m.pending, m.flash = modeConfirm, msg.name, ""
+			m.mode, m.pending, m.flash, m.ask = modeConfirm, msg.name, "", i18n.T("tui.token_refreshing_confirm")
+		case msg.offerOK && errors.Is(msg.err, ErrClaudeIdle):
+			m.mode, m.pending, m.flash, m.ask = modeConfirm, msg.name, "", i18n.T("tui.claude_idle_confirm")
 		case errors.Is(msg.err, ErrDown):
 			m.down = true
 		default:

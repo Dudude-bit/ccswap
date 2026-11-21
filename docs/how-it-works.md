@@ -78,7 +78,8 @@ holds (package `switcher`):
    email (case does not matter). A match updates the fingerprint.
 3. **No answer.** If the access token has expired, because Claude Code has not run for a while, the
    login cannot be identified until Claude Code refreshes it. Auto-switch waits, and `ccswap use` refuses
-   unless `--force`.
+   unless `--force`; its message, the TUI's question and the page say so. A login Claude Code cannot renew,
+   such as a blocked or logged-out account, has no other way out.
 
 Claude Code rotates its refresh token when it refreshes its login, so step 2 runs about once after each
 of its refreshes. When the item holds a login whose email no account has, ccswap reports it once

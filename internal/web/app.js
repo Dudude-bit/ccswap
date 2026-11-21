@@ -103,6 +103,7 @@ const errArgs = (e, name) => ({
   wrong_account: [state.accounts?.find((a) => a.name === name)?.email || name], login_failed: [where(), e.message],
   login_pending: [name], login_cooldown: [name], update_failed: [e.message],
   no_reset_credit: [name], reset_changed: [name], not_limited: [name], reset_failed: [e.message],
+  entry_expired: [where(), name],
 }[e.code] ?? [where()]);
 
 function describe(e, name = '<name>') {
